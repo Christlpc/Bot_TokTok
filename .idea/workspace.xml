@@ -5,14 +5,38 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="35b64399-8a4e-44f5-af4c-cd2b8d8d2985" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.env" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources/d58df562-c3b1-4a19-9df1-04b797c69319.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources/d58df562-c3b1-4a19-9df1-04b797c69319/storage_v2/_src_/database/deliverydb.cvs9QA.meta" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources/d58df562-c3b1-4a19-9df1-04b797c69319/storage_v2/_src_/database/deliverydb.cvs9QA/schema/information_schema.FNRwLQ.meta" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources/d58df562-c3b1-4a19-9df1-04b797c69319/storage_v2/_src_/database/deliverydb.cvs9QA/schema/pg_catalog.0S1ZNQ.meta" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources/d58df562-c3b1-4a19-9df1-04b797c69319/storage_v2/_src_/database/deliverydb.cvs9QA/schema/public.abK9xQ.meta" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/.idea/delivery_bot.iml" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/admin.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/apps.py" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/chatbot/conversation_flow.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/migrations/0001_initial.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/migrations/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/models.py" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/chatbot/openai_agent.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/tests.py" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/chatbot/urls.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/chatbot/views.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/db.sqlite3" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/delivery_bot/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/delivery_bot/asgi.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/delivery_bot/settings.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/delivery_bot/urls.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/delivery_bot/wsgi.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/manage.py" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/test_gradio.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -109,7 +133,7 @@
       <workItem from="1754494501107" duration="7662000" />
       <workItem from="1754580764278" duration="709000" />
       <workItem from="1754589940154" duration="13798000" />
-      <workItem from="1754638398896" duration="1295000" />
+      <workItem from="1754638398896" duration="1597000" />
     </task>
     <servers />
   </component>
