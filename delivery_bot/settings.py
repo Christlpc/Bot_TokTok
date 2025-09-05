@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-37hfik0m$(i585qwvr$b3r*)ce!w9_ezcu=$9x*(9ir$#bi_nk
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["bot-toktok-3.onrender.com"]
 render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 if render_host:
     ALLOWED_HOSTS.append(render_host)
