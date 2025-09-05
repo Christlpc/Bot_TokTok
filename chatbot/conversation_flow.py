@@ -211,7 +211,7 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        r = api_request(session, "GET", "/api/v1/livraisons/livraisons/mes_livraisons/")
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
         data = r.json()
         if not data:
