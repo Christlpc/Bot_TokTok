@@ -5,14 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="35b64399-8a4e-44f5-af4c-cd2b8d8d2985" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/chatbot/conversation_flow.py" beforeDir="false" afterPath="$PROJECT_DIR$/chatbot/conversation_flow.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/chatbot/openai_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/chatbot/openai_agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/chatbot/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/chatbot/views.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_gradio.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_gradio.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/delivery_bot/settings.py" beforeDir="false" afterPath="$PROJECT_DIR$/delivery_bot/settings.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -118,7 +112,7 @@
       <workItem from="1755522429748" duration="1788000" />
       <workItem from="1756141408678" duration="864000" />
       <workItem from="1756366882310" duration="31753000" />
-      <workItem from="1757060452525" duration="2981000" />
+      <workItem from="1757060452525" duration="5264000" />
     </task>
     <servers />
   </component>

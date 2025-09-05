@@ -33,6 +33,8 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "testserver",
+    "bot-toktok-3.onrender.com",  # ton domaine Render
+
 ]
 
 
