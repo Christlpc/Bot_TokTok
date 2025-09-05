@@ -3,6 +3,7 @@ import json
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from .utils import send_whatsapp_message
+from .conversation_flow import handle_message  # importer ton moteur
 
 VERIFY_TOKEN = "toktok_secret"
 
@@ -23,15 +24,22 @@ def whatsapp_webhook(request):
             entry = body["entry"][0]
             changes = entry["changes"][0]["value"]
             messages = changes.get("messages")
+
             if messages:
                 msg = messages[0]
                 from_number = msg["from"]
-                text = msg["text"]["body"] if msg.get("type") == "text" else None
+                text = msg["text"]["body"] if msg.get("type") == "text" else ""
 
                 print(f"Message reçu de {from_number}: {text}")
 
-                # Répondre automatiquement
-                send_whatsapp_message(from_number, "Bonjour 👋, bienvenue chez TokTok Delivery !")
+                # Appeler ton moteur chatbot
+                bot_output = handle_message(from_number, text)
+
+                # Récupérer la réponse texte
+                response_text = bot_output.get("response", "❌ Erreur interne.")
+
+                # Envoyer la réponse au client
+                send_whatsapp_message(from_number, response_text)
 
         except Exception as e:
             print("Erreur webhook:", e)
