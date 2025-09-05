@@ -1,18 +1,13 @@
-import os
-import requests
+import os, requests
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-
 WHATSAPP_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 
 
 def send_whatsapp_message(to, text):
-    """Envoie un message texte simple."""
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    """Envoi d’un simple message texte WhatsApp"""
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -25,11 +20,8 @@ def send_whatsapp_message(to, text):
 
 
 def send_whatsapp_buttons(to, body_text, buttons):
-    """Envoie un message interactif avec boutons."""
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    """Envoi de boutons interactifs (max 3)"""
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -40,7 +32,7 @@ def send_whatsapp_buttons(to, body_text, buttons):
             "action": {
                 "buttons": [
                     {"type": "reply", "reply": {"id": f"btn_{i}", "title": b}}
-                    for i, b in enumerate(buttons, 1)
+                    for i, b in enumerate(buttons[:3], 1)
                 ]
             }
         }
@@ -51,26 +43,22 @@ def send_whatsapp_buttons(to, body_text, buttons):
 
 
 def send_whatsapp_location_request(to):
-    """Invite l’utilisateur à partager sa localisation."""
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    """Demande officielle de localisation (WhatsApp Cloud API)"""
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "interactive",
         "interactive": {
-            "type": "button",
-            "body": {"text": "📍 Merci de partager la localisation de départ du colis"},
+            "type": "location_request_message",
+            "body": {
+                "text": "📍 Merci de partager la *localisation de départ* du colis"
+            },
             "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": "share_location", "title": "Partager ma localisation"}},
-                    {"type": "reply", "reply": {"id": "manual_address", "title": "Entrer une adresse manuellement"}},
-                ]
+                "name": "send_location"
             }
         }
     }
     res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API location btn:", res.text)
+    print("Réponse API location_request:", res.text)
     return res.json()

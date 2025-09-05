@@ -1,7 +1,11 @@
 import json
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from .utils import send_whatsapp_message, send_whatsapp_buttons, send_whatsapp_location_request
+from .utils import (
+    send_whatsapp_message,
+    send_whatsapp_buttons,
+    send_whatsapp_location_request
+)
 from .conversation_flow import handle_message, get_session
 
 VERIFY_TOKEN = "toktok_secret"
@@ -33,7 +37,7 @@ def whatsapp_webhook(request):
 
                 print(f"Message reçu de {from_number}: {text}")
 
-                # Gérer le cas localisation
+                # 📍 Cas où l’utilisateur partage sa localisation
                 if msg_type == "location":
                     lat = msg["location"]["latitude"]
                     lng = msg["location"]["longitude"]
@@ -47,18 +51,18 @@ def whatsapp_webhook(request):
                         )
                         return JsonResponse({"status": "ok"}, status=200)
 
-                # Passer au moteur chatbot
+                # 🔄 Passer le texte reçu au moteur conversationnel
                 bot_output = handle_message(from_number, text)
                 response_text = bot_output.get("response", "❌ Erreur interne.")
                 buttons = bot_output.get("buttons")
 
-                # Cas spécial : demande d'adresse → proposer la localisation
+                # Cas spécial : si on attend une adresse de départ → proposer partage localisation
                 session = get_session(from_number)
                 if session["step"] == "COURIER_DEPART":
                     send_whatsapp_location_request(from_number)
                     return JsonResponse({"status": "ok"}, status=200)
 
-                # Envoyer soit boutons, soit texte simple
+                # Envoi normal (boutons ou texte)
                 if buttons:
                     send_whatsapp_buttons(from_number, response_text, buttons)
                 else:
