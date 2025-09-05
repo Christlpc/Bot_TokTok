@@ -20,8 +20,20 @@ def send_whatsapp_message(to, text):
 
 
 def send_whatsapp_buttons(to, body_text, buttons):
-    """Envoi de boutons interactifs (max 3)"""
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+
+    # Mapping automatique texte → id
+    id_map = {
+        "Confirmer": "btn_confirmer",
+        "Annuler": "btn_annuler",
+        "Cash": "btn_cash",
+        "Mobile Money": "btn_mobile",
+        "Virement": "btn_virement",
+        "Nouvelle demande": "btn_1",
+        "Suivre ma livraison": "btn_2",
+        "Marketplace": "btn_3",
+    }
+
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -31,8 +43,8 @@ def send_whatsapp_buttons(to, body_text, buttons):
             "body": {"text": body_text},
             "action": {
                 "buttons": [
-                    {"type": "reply", "reply": {"id": f"btn_{i}", "title": b}}
-                    for i, b in enumerate(buttons[:3], 1)
+                    {"type": "reply", "reply": {"id": id_map.get(b, b.lower()), "title": b}}
+                    for b in buttons[:3]
                 ]
             }
         }
