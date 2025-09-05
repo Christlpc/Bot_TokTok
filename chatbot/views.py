@@ -3,7 +3,7 @@ import json
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
-VERIFY_TOKEN = "EAAKuDZAaRilABPVSpuFgZCxExSB8F8mIuyICy9mRySqX7pTCoMvrZCeFQ9GlcOTB518enahc6y0i2vZCXsoeFnJw3d1VaCtyjybpVJM4VYJpABEYxyRcfvkMo3zgiHZBIxllaw4zZBkZAtzAeLqXV0mJDmVZAJvI31BVwqZA2FIjiJVkpNh5ZBMNCFWUNKhiss0Lk5xBbpbDuLeprGd99RyCzNO5j99KrncZBsxWy2ZB6kci4gZDZD"  # tu définis ton token secret ici
+VERIFY_TOKEN = "toktok_secret"  # tu définis ton token secret ici
 
 @csrf_exempt
 def whatsapp_webhook(request):
