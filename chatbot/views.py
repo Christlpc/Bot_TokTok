@@ -1,11 +1,11 @@
-# chatbot/views.py
 import json
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from .utils import send_whatsapp_message
-from .conversation_flow import handle_message  # importer ton moteur
+from .utils import send_whatsapp_message, send_whatsapp_buttons, send_whatsapp_location_request
+from .conversation_flow import handle_message, get_session
 
 VERIFY_TOKEN = "toktok_secret"
+
 
 @csrf_exempt
 def whatsapp_webhook(request):
@@ -28,18 +28,41 @@ def whatsapp_webhook(request):
             if messages:
                 msg = messages[0]
                 from_number = msg["from"]
-                text = msg["text"]["body"] if msg.get("type") == "text" else ""
+                msg_type = msg.get("type")
+                text = msg["text"]["body"] if msg_type == "text" else ""
 
                 print(f"Message reçu de {from_number}: {text}")
 
-                # Appeler ton moteur chatbot
+                # Gérer le cas localisation
+                if msg_type == "location":
+                    lat = msg["location"]["latitude"]
+                    lng = msg["location"]["longitude"]
+                    session = get_session(from_number)
+                    if session["step"] == "COURIER_DEPART":
+                        session["new_request"]["depart"] = f"{lat},{lng}"
+                        session["step"] = "COURIER_DEST"
+                        send_whatsapp_message(
+                            from_number,
+                            "✅ Localisation enregistrée.\n📍 Maintenant, quelle est l'adresse de destination ?"
+                        )
+                        return JsonResponse({"status": "ok"}, status=200)
+
+                # Passer au moteur chatbot
                 bot_output = handle_message(from_number, text)
-
-                # Récupérer la réponse texte
                 response_text = bot_output.get("response", "❌ Erreur interne.")
+                buttons = bot_output.get("buttons")
 
-                # Envoyer la réponse au client
-                send_whatsapp_message(from_number, response_text)
+                # Cas spécial : demande d'adresse → proposer la localisation
+                session = get_session(from_number)
+                if session["step"] == "COURIER_DEPART":
+                    send_whatsapp_location_request(from_number)
+                    return JsonResponse({"status": "ok"}, status=200)
+
+                # Envoyer soit boutons, soit texte simple
+                if buttons:
+                    send_whatsapp_buttons(from_number, response_text, buttons)
+                else:
+                    send_whatsapp_message(from_number, response_text)
 
         except Exception as e:
             print("Erreur webhook:", e)
