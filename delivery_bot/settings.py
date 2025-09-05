@@ -30,7 +30,11 @@ SECRET_KEY = 'django-insecure-37hfik0m$(i585qwvr$b3r*)ce!w9_ezcu=$9x*(9ir$#bi_nk
 DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
-
+render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+if render_host:
+    ALLOWED_HOSTS.append(render_host)
+else:
+    ALLOWED_HOSTS = ["*"]  # fallback en cas d’échec
 
 # Application definition
 
