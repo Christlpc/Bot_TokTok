@@ -21,5 +21,20 @@
         </introspection-scope>
       </schema-mapping>
     </data-source>
+    <data-source name="delivery_platform" uuid="f33d7b38-6283-4e43-83c6-3f3031c929c7">
+      <database-info product="PostgreSQL" version="17.6 (Debian 17.6-1.pgdg12+1)" jdbc-version="4.2" driver-name="PostgreSQL JDBC Driver" driver-version="42.7.3" dbms="POSTGRES" exact-version="17.6" exact-driver-version="42.7">
+        <identifier-quote-string>&quot;</identifier-quote-string>
+      </database-info>
+      <case-sensitivity plain-identifiers="lower" quoted-identifiers="exact" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>prime_danger</user-name>
+      <schema-mapping>
+        <introspection-scope>
+          <node kind="database" qname="@">
+            <node kind="schema" qname="@" />
+          </node>
+        </introspection-scope>
+      </schema-mapping>
+    </data-source>
   </component>
 </project>

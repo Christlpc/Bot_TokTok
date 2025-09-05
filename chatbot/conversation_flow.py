@@ -1,171 +1,370 @@
-import re
-from .openai_agent import ask_gpt
+from __future__ import annotations
+import re, os, requests
+from typing import Dict, Any, Optional, List
+from urllib.parse import quote_plus
 
-user_sessions = {}
+API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 
-ACCUEIL_MSG = (
-    "🚚 *Bienvenue sur TokTok Delivery* !\n"
-    "Que souhaitez-vous faire aujourd'hui ?\n"
-    "1️⃣ Nouvelle demande de coursier\n"
-    "2️⃣ Suivre ma course\n"
-    "3️⃣ Historique des courses\n\n"
-    "✉️ *Vous pouvez à tout moment taper « menu » ou « retour » pour revenir à l'accueil.*"
+user_sessions: Dict[str, Dict[str, Any]] = {}
+
+WELCOME_TEXT = (
+    "🚚 Bonjour et Bienvenue sur **TokTok Delivery** !\n"
+    "✨ La première plateforme de livraison de Brazzaville.\n\n"
+    "🔐 Tapez votre mot de passe pour vous connecter,\n"
+    "ou envoyez *s'inscrire* pour créer un compte."
 )
-ACCUEIL_BTNS = ["Nouvelle demande", "Suivre ma course", "Historique"]
+MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma livraison", "Historique", "Marketplace"]
+GREETINGS = ["bonjour", "salut", "bjr", "hello", "bonsoir", "hi"]
 
-SALUTATIONS = ["bonjour", "salut", "hello", "coucou", "bonsoir", "yo", "hey", "salutation"]
+def normalize(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
 
-INTENT_PATTERNS = [
-    (r"(1|nouvelle|demande|commander|envoyer|livraison|colis|coursier)", "nouvelle demande"),
-    (r"(2|suivre|suivi|tracking|track|statut|où est mon colis|où est ma livraison)", "suivre"),
-    (r"(3|historique|courses précédentes|liste|récapitulatif)", "historique"),
-]
+def build_response(text: str, buttons: Optional[List[str]] = None) -> Dict[str, Any]:
+    r = {"response": text}
+    if buttons:
+        r["buttons"] = buttons
+    return r
 
-def reset_session(phone):
-    user_sessions[phone] = {"step": 0, "data": {}, "last_confirm": None}
+def start_session(phone: str) -> Dict[str, Any]:
+    user_sessions[phone] = {
+        "phone_number": phone,
+        "step": "WELCOME",
+        "profile": {},
+        "auth_token": None,
+        "new_request": {
+            "depart": None,
+            "destination": None,
+            "photo": None,
+            "value_fcfa": None,
+            "description": None,
+            "market_choice": None,
+            "payment_method": None,
+        },
+    }
+    return user_sessions[phone]
 
-def detect_menu_choice(msg):
-    msg = msg.lower()
-    for pattern, intent in INTENT_PATTERNS:
-        if re.search(pattern, msg):
-            return intent
-    return None
+def get_session(phone: str) -> Dict[str, Any]:
+    return user_sessions.get(phone) or start_session(phone)
 
-def is_salutation(msg):
-    return msg.strip().lower() in SALUTATIONS
+def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
+    headers = kwargs.pop("headers", {})
+    if session.get("auth_token"):
+        headers["Authorization"] = f"Bearer {session['auth_token']}"
+    r = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=15, **kwargs)
+    print(f"[DEBUG] API {method} {path} ->", r.status_code, r.text[:200])
+    return r
 
-def is_retour(msg):
-    return msg.strip().lower() in ["menu", "retour", "accueil", "recommencer", "restart"]
+# --- Auth ---
+def handle_login(session: Dict[str, Any]) -> Dict[str, Any]:
+    session["step"] = "LOGIN_WAIT_PWD"
+    return build_response(WELCOME_TEXT)
 
-def is_oui(msg):
-    return msg.strip().lower() in ["oui", "yes", "yep", "ok", "d'accord", "certainement", "bien sûr"]
-
-def is_non(msg):
-    return msg.strip().lower() in ["non", "no", "pas du tout", "jamais", "annuler"]
-
-def handle_message(phone, message):
-    if phone not in user_sessions:
-        reset_session(phone)
-
-    session = user_sessions[phone]
-    step = session["step"]
-    data = session["data"]
-    msg = message.strip()
-
+def handle_login_password(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
     try:
-        # Commande de retour ou menu à tout moment
-        if is_retour(msg):
-            reset_session(phone)
-            return {"response": ACCUEIL_MSG, "buttons": ACCUEIL_BTNS}
+        r = requests.post(f"{API_BASE}/api/v1/auth/login/",
+                          json={"username": session["phone_number"], "password": pwd}, timeout=10)
+        print("[DEBUG] login status:", r.status_code, r.text)
+        if r.status_code != 200:
+            if "username" in r.text or "non trouvé" in r.text.lower():
+                session["step"] = "REGISTER_NAME"
+                return build_response("⚠️ Ce numéro n'est pas encore enregistré. Créons un compte. Quel est votre nom complet ?")
+            return build_response("❌ Mot de passe incorrect. Réessayez ou tapez *s'inscrire*.")
+        data = r.json()
+        token = data.get("access") or data.get("token")
+        if not token:
+            return build_response("❌ Impossible de récupérer le token.")
+        session["auth_token"] = token
+        session["step"] = "MENU"
+        try:
+            profile = api_request(session, "GET", "/api/v1/auth/clients/my_profile/").json()
+            first = profile.get("user", {}).get("first_name", "")
+            last = profile.get("user", {}).get("last_name", "")
+            nom = (first + " " + last).strip() or session["phone_number"]
+            session["profile"]["name"] = nom
+        except:
+            nom = session["phone_number"]
+        return build_response(
+            f"""
+            👋 Bonjour {nom}, heureux de vous retrouver sur **TokTok Delivery** 🚚✨  
 
-        # Étape 0 : accueil/salutation/entrée
-        if step == 0:
-            if is_salutation(msg) or msg == "" or "livraison" in msg.lower() or "colis" in msg.lower() or "envoyer" in msg.lower():
-                session["step"] = 1
-                return {"response": ACCUEIL_MSG, "buttons": ACCUEIL_BTNS}
-            session["step"] = 1
-            return {"response": ACCUEIL_MSG, "buttons": ACCUEIL_BTNS}
+            Veuillez sélectionner une option pour continuer :  
 
-        # Étape 1 : choix du menu (tolérance)
-        if step == 1:
-            choix = detect_menu_choice(msg)
-            if choix == "nouvelle demande":
-                session["step"] = 10
-                session["last_confirm"] = None
-                return {"response": "📝 *Nouvelle demande*.\nQuel est votre nom complet ?"}
-            elif choix == "suivre":
-                session["step"] = 20
-                return {"response": "🔎 Merci d'indiquer le numéro ou l'identifiant de la course à suivre."}
-            elif choix == "historique":
-                session["step"] = 30
-                return {"response": "🗒️ *Historique* — cette fonctionnalité arrive bientôt !"}
-            # Reconnaissance d'un mot clé prix/tarif même hors menu
-            if "tarif" in msg.lower() or "prix" in msg.lower() or "coût" in msg.lower():
-                return {"response": "💰 Nos tarifs varient selon la ville, la distance et le poids du colis. Souhaitez-vous faire une simulation ?", "buttons": ["Nouvelle demande", "Retour menu"]}
-            return {"response": ACCUEIL_MSG, "buttons": ACCUEIL_BTNS}
-
-        # Nouvelle demande de livraison (étapes 10+)
-        if step == 10:
-            # Vérif simple sur nom
-            if len(msg) < 2:
-                return {"response": "Merci de préciser votre nom complet."}
-            data["nom"] = msg
-            session["step"] = 11
-            return {"response": "📍 *Adresse de départ* : où le coursier doit-il récupérer le colis ?"}
-
-        if step == 11:
-            if len(msg) < 3:
-                return {"response": "Merci de préciser l'adresse complète de départ."}
-            data["adresse_depart"] = msg
-            session["step"] = 12
-            return {"response": "🚩 *Adresse de destination* : où doit-on livrer le colis ?"}
-
-        if step == 12:
-            if len(msg) < 3:
-                return {"response": "Merci de préciser l'adresse complète de destination."}
-            data["adresse_destination"] = msg
-            session["step"] = 13
-            return {"response": "📷 *Photo du colis* : envoyez une photo (ou tapez 'skip' pour passer)."}
-
-        if step == 13:
-            if msg.lower() not in ["skip", "sauter", "non", "pas de photo", "aucune"]:
-                data["photo"] = msg
-            else:
-                data["photo"] = None
-            session["step"] = 14
-            return {"response": "💵 *Valeur estimée du colis* (en FCFA) ?"}
-
-        if step == 14:
-            try:
-                valeur = int(re.sub(r"[^\d]", "", msg))
-                if valeur < 1:
-                    raise ValueError()
-                data["valeur"] = valeur
-            except Exception:
-                return {"response": "Merci d'indiquer la valeur du colis (un nombre entier en FCFA)."}
-            session["step"] = 15
-            recap = (
-                f"📝 *Récapitulatif de la demande* :\n"
-                f"• Nom : {data.get('nom')}\n"
-                f"• Départ : {data.get('adresse_depart')}\n"
-                f"• Destination : {data.get('adresse_destination')}\n"
-                f"• Photo : {'Oui' if data.get('photo') else 'Non'}\n"
-                f"• Valeur : {data.get('valeur')} FCFA\n"
-                "✅ Confirmez-vous cette commande ?"
-            )
-            session["last_confirm"] = "commande"
-            return {"response": recap, "buttons": ["Oui", "Non", "Menu"]}
-
-        if step == 15:
-            if is_oui(msg):
-                # Ici : sauvegarder en base, envoyer notif, etc.
-                reset_session(phone)
-                return {"response": "👍 Votre demande a bien été prise en compte ! Un coursier vous contactera très vite.\nMerci pour votre confiance. 😊", "buttons": ACCUEIL_BTNS}
-            elif is_non(msg):
-                reset_session(phone)
-                return {"response": "🚫 Demande annulée. Vous êtes de retour au menu principal.", "buttons": ACCUEIL_BTNS}
-            else:
-                # Si la personne écrit autre chose
-                return {"response": "Merci de répondre par Oui ou Non pour confirmer la commande.", "buttons": ["Oui", "Non", "Menu"]}
-
-        # Suivi de course (étape 20)
-        if step == 20:
-            # Ici tu peux brancher la vraie recherche avec la base
-            reset_session(phone)
-            return {"response": "⏳ Le suivi de course sera disponible très bientôt. Merci pour votre patience !"}
-
-        # Historique (étape 30)
-        if step == 30:
-            reset_session(phone)
-            return {"response": "🗒️ L'historique de vos courses arrive prochainement. Restez connectés !"}
-
+            1️⃣ Nouvelle demande (Coursier)  
+            2️⃣ Suivre ma livraison  
+            3️⃣ Historique de mes livraisons  
+            4️⃣ Marketplace (Restaurants & Commerces)  
+            """,
+        MAIN_MENU_BTNS,
+        )
     except Exception as e:
-        print(f"❌ Erreur dans le flow : {e}")
+        print("[ERROR] login exception:", e)
+        return build_response("❌ Erreur lors de la connexion.")
 
-    # Fallback IA avec prompt professionnel
+# --- Register ---
+def handle_register_start(session: Dict[str, Any]) -> Dict[str, Any]:
+    session["step"] = "REGISTER_NAME"
+    return build_response("👤 Bienvenue ! Quel est votre nom complet ?")
+
+def handle_register_name(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    names = text.split(" ", 1)
+    session["profile"]["first_name"] = names[0]
+    session["profile"]["last_name"] = names[1] if len(names) > 1 else ""
+    session["step"] = "REGISTER_EMAIL"
+    return build_response("📧 Merci. Quelle est votre adresse email ?")
+
+def handle_register_email(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["profile"]["email"] = text
+    session["step"] = "REGISTER_ADDRESS"
+    return build_response("📍 Quelle est votre adresse principale ?")
+
+def handle_register_address(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["profile"]["address"] = text
+    session["step"] = "REGISTER_PWD"
+    return build_response("🔑 Choisissez un mot de passe pour votre compte.")
+
+def handle_register_pwd(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
     try:
-        gpt_reply = ask_gpt(message)
-        return {"response": gpt_reply}
+        payload = {
+            "user": {
+                "username": session["phone_number"],
+                "email": session["profile"]["email"],
+                "first_name": session["profile"]["first_name"],
+                "last_name": session["profile"]["last_name"],
+                "phone_number": session["phone_number"],
+                "user_type": "client",
+                "password": pwd,
+                "password_confirm": pwd,
+            },
+            "adresse_principale": session["profile"]["address"],
+            "coordonnees_gps": session["profile"].get("gps", ""),
+            "preferences_livraison": session["profile"].get("preferences", "Standard"),
+        }
+        r = requests.post(f"{API_BASE}/api/v1/auth/clients/", json=payload, timeout=10)
+        print("[DEBUG] register status:", r.status_code, r.text)
+        if r.status_code not in [200, 201]:
+            return build_response("❌ Erreur lors de l'inscription.")
+        return handle_login_password(session, pwd)
     except Exception as e:
-        print(f"❌ GPT Error: {e}")
-        return {"response": "Je n'ai pas pu répondre pour le moment."}
+        print("[ERROR] register exception:", e)
+        return build_response("❌ Erreur réseau à l'inscription.")
+
+# --- Missions / Coursier ---
+def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
+    d = session["new_request"]
+    try:
+        payload = {
+            "entreprise_demandeur": session["profile"].get("name") or "Client TokTok",
+            "contact_entreprise": session["phone_number"],
+
+            "adresse_recuperation": d["depart"],
+            "coordonnees_recuperation": str(d.get("coordonnees_gps", "")),
+
+            "adresse_livraison": d["destination"],
+            "coordonnees_livraison": "",  # si tu veux aussi demander localisation de livraison plus tard
+
+            "nom_client_final": session["profile"].get("name") or "Client",
+            "telephone_client_final": session["phone_number"],
+
+            "description_produit": d["description"],
+            "valeur_produit": str(d["value_fcfa"] or 0),  # ✅ API attend "valeur_produit" en string
+            "type_paiement": "entreprise_paie",
+        }
+
+        r = api_request(session, "POST", "/api/v1/coursier/missions/", json=payload)
+        r.raise_for_status()
+        mission = r.json()
+        mission_id = mission.get("id")
+
+        payload2 = {
+            "mission_id": mission_id,
+            "numero_telephone": session["phone_number"],
+            "message_original": f"Demande via WhatsApp : {d['description'] or ''}",
+        }
+        r2 = api_request(session, "POST", "/api/v1/coursier/missions/creer_depuis_whatsapp/", json=payload2)
+        r2.raise_for_status()
+
+        session["step"] = "MENU"
+        return build_response(f"✅ Mission #{mission_id} créée avec succès.\nUn livreur va bientôt accepter la course 🚴", MAIN_MENU_BTNS)
+    except Exception as e:
+        print("[ERROR] courier_create:", e)
+        return build_response("❌ Erreur lors de la création de la mission.", MAIN_MENU_BTNS)
+
+# --- Historique & Suivi ---
+def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
+    session["step"] = "FOLLOW_WAIT"
+    return build_response("🔎 Entrez l'ID de votre livraison.")
+
+def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    try:
+        r = api_request(session, "GET", f"/api/v1/livraisons/livraisons/{text}/")
+        if r.status_code == 404:
+            return build_response("❌ Livraison introuvable.", MAIN_MENU_BTNS)
+        r.raise_for_status()
+        d = r.json()
+        return build_response(
+            f"📦 Livraison #{d['id']}\nStatut: {d.get('statut')}\nDépart: {d.get('adresse_recuperation')}\nArrivée: {d.get('adresse_livraison')}",
+            MAIN_MENU_BTNS,
+        )
+    except Exception as e:
+        print("[ERROR] follow_lookup:", e)
+        return build_response("❌ Erreur suivi livraison.", MAIN_MENU_BTNS)
+
+def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        r = api_request(session, "GET", "/api/v1/livraisons/livraisons/mes_livraisons/")
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return build_response("🗂️ Aucun historique disponible.", MAIN_MENU_BTNS)
+        lines = [f"#{d['id']} — {d.get('statut','')} → {d.get('adresse_livraison','')}" for d in data[:5]]
+        return build_response("🗂️ Historique de vos livraisons:\n" + "\n".join(lines), MAIN_MENU_BTNS)
+    except Exception as e:
+        print("[ERROR] handle_history:", e)
+        return build_response("❌ Erreur historique.", MAIN_MENU_BTNS)
+
+# --- Marketplace ---
+def handle_marketplace(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["step"] = "MARKET_SEARCH"
+    return build_response("🛍️ Quel produit recherchez-vous ?")
+
+def handle_marketplace_search(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    r = api_request(session, "GET", f"/api/v1/marketplace/produits/?search={quote_plus(text)}")
+    produits = r.json()
+    items = produits.get("results", [])
+    if not items:
+        return build_response("❌ Aucun produit trouvé. Essayez un autre mot-clé ou revenez au menu.", ["Menu principal"])
+    lines = [f"• {p['nom']} ({p['prix']} FCFA)" for p in items[:5]]
+    session["step"] = "MARKET_CHOICE"
+    return build_response("🛍️ Produits disponibles :\n" + "\n".join(lines) + "\n\nIndiquez le nom du produit choisi.")
+
+def handle_marketplace_choice(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["new_request"]["market_choice"] = text
+    session["step"] = "MARKET_DESC"
+    return build_response(f"📦 Vous avez choisi **{text}**.\nSouhaitez-vous ajouter une description particulière ?")
+
+def handle_marketplace_desc(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["new_request"]["description"] = text
+    session["step"] = "MARKET_PAY"
+    return build_response("💳 Quel est votre mode de paiement ?", ["Cash", "Mobile Money", "Airtel Money", "Onyfast", "Virement"])
+
+def handle_marketplace_pay(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    mapping = {
+        "cash": "cash",
+        "mobile money": "mobile_money",
+        "airtel": "airtel_money",
+        "onyfast": "onyfast",
+        "virement": "virement",
+    }
+    t = text.lower()
+    if t not in mapping:
+        return build_response("Merci de choisir un mode valide.", ["Cash", "Mobile Money", "Airtel Money", "Onyfast", "Virement"])
+    session["new_request"]["payment_method"] = mapping[t]
+    d = session["new_request"]
+    session["step"] = "MARKET_CONFIRM"
+    recap = (
+        f"📝 Commande Marketplace :\n"
+        f"• Produit : {d['market_choice']}\n"
+        f"• Description : {d['description']}\n"
+        f"• Paiement : {d['payment_method']}\n"
+        "Confirmez-vous la commande ?"
+    )
+    return build_response(recap, ["Confirmer", "Annuler"])
+
+def handle_marketplace_confirm(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    if text.lower() in ["confirmer", "oui"]:
+        session["step"] = "MENU"
+        return build_response("✅ Votre commande marketplace a été enregistrée avec succès !", MAIN_MENU_BTNS)
+    if text.lower() in ["annuler", "non"]:
+        session["step"] = "MENU"
+        return build_response("❌ Commande annulée.", MAIN_MENU_BTNS)
+    return build_response("Répondez par Confirmer ou Annuler.", ["Confirmer", "Annuler"])
+
+# --- Router ---
+def handle_message(phone: str, text: str, photo_present: bool = False, photo_url: Optional[str] = None, price_value: Optional[float] = None) -> Dict[str, Any]:
+    text = normalize(text)
+    t = text.lower()
+    session = get_session(phone)
+
+    # Auth
+    if not session.get("auth_token"):
+        if session["step"] == "WELCOME":
+            return handle_login(session)
+        if session["step"] == "LOGIN_WAIT_PWD":
+            if t in ["inscrire", "s'inscrire", "je veux m'inscrire"]:
+                return handle_register_start(session)
+            return handle_login_password(session, text)
+        if session["step"] == "REGISTER_NAME":
+            return handle_register_name(session, text)
+        if session["step"] == "REGISTER_EMAIL":
+            return handle_register_email(session, text)
+        if session["step"] == "REGISTER_ADDRESS":
+            return handle_register_address(session, text)
+        if session["step"] == "REGISTER_PWD":
+            return handle_register_pwd(session, text)
+        return build_response(WELCOME_TEXT)
+
+    # Menu
+    if t in GREETINGS or t in ["menu", "accueil"]:
+        session["step"] = "MENU"
+        return build_response("Veuillez sélectionner une option :", MAIN_MENU_BTNS)
+    if t in ["1", "nouvelle demande", "coursier"]:
+        session["step"] = "COURIER_DEPART"
+        return build_response("📍 Quelle est l'adresse de départ du colis ?")
+    if t in ["2", "suivre"]:
+        return handle_follow(session)
+    if t in ["3", "historique"]:
+        return handle_history(session)
+    if t in ["4", "marketplace"]:
+        return handle_marketplace(session, text)
+
+    # Courier flow
+    if session["step"] == "COURIER_DEPART":
+        session["new_request"]["depart"] = text
+        session["step"] = "COURIER_DEST"
+        return build_response("📍 Quelle est l'adresse de destination ?")
+    if session["step"] == "COURIER_DEST":
+        session["new_request"]["destination"] = text
+        session["step"] = "COURIER_VALUE"
+        return build_response("💰 Quelle est la valeur du colis (FCFA) ?")
+    if session["step"] == "COURIER_VALUE":
+        amt = int(re.sub(r"[^0-9]", "", text)) if re.sub(r"[^0-9]", "", text) else None
+        if amt:
+            session["new_request"]["value_fcfa"] = amt
+            session["step"] = "COURIER_DESC"
+            return build_response("📦 Merci. Pouvez-vous décrire le colis ?")
+        return build_response("Montant invalide.")
+    if session["step"] == "COURIER_DESC":
+        session["new_request"]["description"] = text
+        session["step"] = "COURIER_CONFIRM"
+        d = session["new_request"]
+        recap = (
+            f"📝 Détails de votre demande :\n"
+            f"• Client : {session['profile'].get('name')}\n"
+            f"• Départ : {d['depart']}\n"
+            f"• Destination : {d['destination']}\n"
+            f"• Valeur : {d['value_fcfa']} FCFA\n"
+            f"• Description : {d['description']}\n"
+            "Confirmez-vous la création de la mission ?"
+        )
+        return build_response(recap, ["Confirmer", "Annuler"])
+    if session["step"] == "COURIER_CONFIRM":
+        if t in ["confirmer", "oui"]:
+            return courier_create(session)
+        if t in ["annuler", "non"]:
+            session["step"] = "MENU"
+            return build_response("✅ Demande annulée.", MAIN_MENU_BTNS)
+        return build_response("Répondez par Confirmer ou Annuler.", ["Confirmer", "Annuler"])
+
+    # Marketplace flow
+    if session["step"] == "MARKET_SEARCH":
+        return handle_marketplace_search(session, text)
+    if session["step"] == "MARKET_CHOICE":
+        return handle_marketplace_choice(session, text)
+    if session["step"] == "MARKET_DESC":
+        return handle_marketplace_desc(session, text)
+    if session["step"] == "MARKET_PAY":
+        return handle_marketplace_pay(session, text)
+    if session["step"] == "MARKET_CONFIRM":
+        return handle_marketplace_confirm(session, text)
+
+    return build_response("Tapez *menu* pour revenir au menu principal.", MAIN_MENU_BTNS)
