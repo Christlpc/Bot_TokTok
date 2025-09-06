@@ -1,11 +1,11 @@
 from __future__ import annotations
-import re, os, requests
+import re, os, requests, logging
 from typing import Dict, Any, Optional, List
 from urllib.parse import quote_plus
 
-API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
+logger = logging.getLogger(__name__)
 
-# Sessions en mémoire (⚠️ à remplacer par DB en production)
+API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 user_sessions: Dict[str, Dict[str, Any]] = {}
 
 WELCOME_TEXT = (
@@ -15,7 +15,6 @@ WELCOME_TEXT = (
     "ou envoyez *s'inscrire* pour créer un compte."
 )
 
-# ⚠️ WhatsApp limite à 3 boutons max
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma livraison", "Marketplace"]
 GREETINGS = ["bonjour", "salut", "bjr", "hello", "bonsoir", "hi"]
 
@@ -29,7 +28,7 @@ def normalize(s: str) -> str:
 def build_response(text: str, buttons: Optional[List[str]] = None) -> Dict[str, Any]:
     r = {"response": text}
     if buttons:
-        r["buttons"] = buttons[:3]  # max 3 boutons
+        r["buttons"] = buttons[:3]
     return r
 
 def start_session(phone: str) -> Dict[str, Any]:
@@ -48,6 +47,7 @@ def start_session(phone: str) -> Dict[str, Any]:
             "payment_method": None,
         },
     }
+    logger.info(f"[SESSION] Nouvelle session pour {mask_sensitive(phone)}")
     return user_sessions[phone]
 
 def get_session(phone: str) -> Dict[str, Any]:
@@ -58,8 +58,15 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     if session.get("auth_token"):
         headers["Authorization"] = f"Bearer {session['auth_token']}"
     r = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=15, **kwargs)
-    print(f"[DEBUG] API {method} {path} ->", r.status_code, r.text[:200])
+    logger.debug(f"[API] {method} {path} -> {r.status_code}")
     return r
+
+def mask_sensitive(value: str, visible: int = 3) -> str:
+    if not value:
+        return ""
+    if len(value) <= visible * 2:
+        return "*" * len(value)
+    return value[:visible] + "****" + value[-visible:]
 
 # ------------------------------------------------------
 # Authentification & Inscription
@@ -104,37 +111,18 @@ def handle_register_pwd(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
             "preferences_livraison": session["profile"].get("preferences", "Standard"),
         }
         r = requests.post(f"{API_BASE}/api/v1/auth/clients/", json=payload, timeout=10)
-        print("[DEBUG] register status:", r.status_code, r.text)
+        logger.debug(f"[REGISTER] statut {r.status_code}")
 
         if r.status_code in [200, 201]:
+            logger.info(f"[REGISTER] Succès inscription pour {mask_sensitive(session['phone_number'])}")
             return handle_login_password(session, pwd)
 
-        data = r.json()
-        details = data.get("details", {})
-
-        if "phone_number" in details.get("user", {}):
-            session["step"] = "LOGIN_WAIT_PWD"
-            return build_response(
-                "⚠️ Ce numéro est déjà associé à un compte.\n"
-                "👉 Tapez votre mot de passe ou envoyez *Réinitialiser*."
-            )
-
-        if "password" in details.get("user", {}):
-            return build_response(
-                "❌ Mot de passe invalide.\n\n"
-                "👉 Il doit contenir :\n"
-                "- 8 caractères min\n"
-                "- 1 majuscule\n"
-                "- 1 minuscule\n"
-                "- 1 chiffre\n"
-                "- 1 caractère spécial"
-            )
-
-        return build_response("❌ Erreur d'inscription. Vérifiez vos infos et réessayez.")
+        logger.warning(f"[REGISTER] Erreur inscription pour {mask_sensitive(session['phone_number'])}")
+        return build_response("❌ Erreur d'inscription. Vérifiez vos informations et réessayez.")
 
     except Exception as e:
-        print("[ERROR] register exception:", e)
-        return build_response("❌ Erreur réseau. Veuillez réessayer plus tard.")
+        logger.error(f"[REGISTER] Exception: {str(e)}")
+        return build_response("❌ Erreur réseau. Réessayez plus tard.")
 
 def handle_login(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "LOGIN_WAIT_PWD"
@@ -147,41 +135,32 @@ def handle_login_password(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
             json={"username": session["phone_number"], "password": pwd},
             timeout=10
         )
-        print("[DEBUG] login status:", r.status_code, r.text)
+        logger.debug(f"[LOGIN] statut {r.status_code}")
 
         if r.status_code != 200:
-            if "username" in r.text or "non trouvé" in r.text.lower():
-                return handle_register_start(session)
-            return build_response("❌ Mot de passe incorrect.\n👉 Réessayez ou envoyez *Réinitialiser*.")
+            logger.warning(f"[LOGIN] Échec connexion pour {mask_sensitive(session['phone_number'])}")
+            return build_response("❌ Mot de passe incorrect.\n👉 Réessayez ou envoyez *S'inscrire*.")
 
         data = r.json()
         token = data.get("access") or data.get("token")
         if not token:
             return build_response("❌ Erreur technique : token manquant.")
+
         session["auth_token"] = token
         session["step"] = "MENU"
 
-        try:
-            profile = api_request(session, "GET", "/api/v1/auth/clients/my_profile/").json()
-            first = profile.get("user", {}).get("first_name", "")
-            last = profile.get("user", {}).get("last_name", "")
-            nom = (first + " " + last).strip() or session["phone_number"]
-            session["profile"]["name"] = nom
-        except:
-            nom = session["phone_number"]
-
+        logger.info(f"[LOGIN] Succès connexion pour {mask_sensitive(session['phone_number'])}")
         return build_response(
-            f"👋 Bonjour {nom}, heureux de vous revoir 🚚✨\n\n"
-            "👉 Choisissez une option :",
-            MAIN_MENU_BTNS,
+            f"👋 Bonjour {mask_sensitive(session['phone_number'])}, heureux de vous revoir 🚚✨\n\n"
+            "👉 Choisissez une option :", MAIN_MENU_BTNS
         )
 
     except Exception as e:
-        print("[ERROR] login exception:", e)
+        logger.error(f"[LOGIN] Exception: {str(e)}")
         return build_response("❌ Erreur réseau. Réessayez plus tard.")
 
 # ------------------------------------------------------
-# Flows Livraison (Coursier)
+# Coursier / Missions
 # ------------------------------------------------------
 
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -207,12 +186,13 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         mission_id = mission.get("id")
 
         session["step"] = "MENU"
+        logger.info(f"[COURIER] Mission {mission_id} créée pour {mask_sensitive(session['phone_number'])}")
         return build_response(
             f"✅ Mission #{mission_id} créée avec succès.\n🚴 Un livreur va bientôt accepter la course.",
             MAIN_MENU_BTNS
         )
     except Exception as e:
-        print("[ERROR] courier_create:", e)
+        logger.error(f"[COURIER] Erreur création mission: {str(e)}")
         return build_response("❌ Erreur lors de la création de la mission.", MAIN_MENU_BTNS)
 
 # ------------------------------------------------------
@@ -238,7 +218,7 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
             MAIN_MENU_BTNS,
         )
     except Exception as e:
-        print("[ERROR] follow_lookup:", e)
+        logger.error(f"[FOLLOW] Exception: {str(e)}")
         return build_response("❌ Erreur lors du suivi.", MAIN_MENU_BTNS)
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -247,11 +227,11 @@ def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
         r.raise_for_status()
         data = r.json()
         if not data:
-            return build_response("🗂️ Aucun historique disponible. Tapez *menu* pour revenir.")
+            return build_response("🗂️ Aucun historique disponible.")
         lines = [f"#{d['id']} — {d.get('statut','')} → {d.get('adresse_livraison','')}" for d in data[:5]]
         return build_response("🗂️ Vos 5 dernières livraisons :\n" + "\n".join(lines), MAIN_MENU_BTNS)
     except Exception as e:
-        print("[ERROR] handle_history:", e)
+        logger.error(f"[HISTORY] Exception: {str(e)}")
         return build_response("❌ Erreur lors du chargement de l'historique.", MAIN_MENU_BTNS)
 
 # ------------------------------------------------------

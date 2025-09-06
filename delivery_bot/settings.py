@@ -13,6 +13,24 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 from pathlib import Path
+import logging
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",  # DEBUG possible en local seulement
+    },
+}
+
+logger = logging.getLogger(__name__)
+
 
 
 
