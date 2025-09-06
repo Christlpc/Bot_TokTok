@@ -289,16 +289,34 @@ def handle_marketplace_pay(session: Dict[str, Any], text: str) -> Dict[str, Any]
         f"• Paiement : {d['payment_method']}\n"
         "👉 Confirmez-vous la commande ?"
     )
-    return build_response(recap, ["Confirmer", "Annuler"])
+    return build_response(recap, ["Confirmer", "Annuler", "Modifier"])
 
 def handle_marketplace_confirm(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    if text.lower() in ["confirmer", "oui"]:
+    t = text.lower()
+    if t in ["confirmer", "oui"]:
         session["step"] = "MENU"
         return build_response("✅ Commande Marketplace enregistrée avec succès !", MAIN_MENU_BTNS)
-    if text.lower() in ["annuler", "non"]:
+    if t in ["annuler", "non"]:
         session["step"] = "MENU"
         return build_response("❌ Commande annulée.", MAIN_MENU_BTNS)
-    return build_response("👉 Répondez par *Confirmer* ou *Annuler*.", ["Confirmer", "Annuler"])
+    if t in ["modifier", "edit"]:
+        session["step"] = "MARKET_EDIT"
+        return build_response("✏️ Que souhaitez-vous modifier ?", ["Produit", "Description", "Paiement"])
+    return build_response("👉 Répondez par Confirmer, Annuler ou Modifier.",
+                          ["Confirmer", "Annuler", "Modifier"])
+
+def handle_marketplace_edit(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    t = text.lower()
+    if t == "produit":
+        session["step"] = "MARKET_SEARCH"
+        return build_response("🛍️ Quel nouveau produit recherchez-vous ?")
+    if t == "description":
+        session["step"] = "MARKET_DESC"
+        return build_response("📦 Entrez la nouvelle description du produit.")
+    if t == "paiement":
+        session["step"] = "MARKET_PAY"
+        return build_response("💳 Choisissez un nouveau mode de paiement.", ["Cash", "Mobile Money", "Virement"])
+    return build_response("👉 Choisissez ce que vous voulez modifier.", ["Produit", "Description", "Paiement"])
 
 # ------------------------------------------------------
 # Router principal
@@ -395,7 +413,7 @@ def handle_message(phone: str, text: str,
             f"• Description : {d['description']}\n\n"
             "👉 Confirmez-vous la mission ?"
         )
-        return build_response(recap, ["Confirmer", "Annuler"])
+        return build_response(recap, ["Confirmer", "Annuler", "Modifier"])
 
     if session["step"] == "COURIER_CONFIRM":
         if t in ["confirmer", "oui"]:
@@ -403,7 +421,25 @@ def handle_message(phone: str, text: str,
         if t in ["annuler", "non"]:
             session["step"] = "MENU"
             return build_response("✅ Demande annulée.", MAIN_MENU_BTNS)
-        return build_response("👉 Répondez par *Confirmer* ou *Annuler*.", ["Confirmer", "Annuler"])
+        if t in ["modifier", "edit"]:
+            session["step"] = "COURIER_EDIT"
+            return build_response("✏️ Que souhaitez-vous modifier ?", ["Départ", "Destination", "Valeur", "Description"])
+        return build_response("👉 Répondez par Confirmer, Annuler ou Modifier.", ["Confirmer", "Annuler", "Modifier"])
+
+    if session["step"] == "COURIER_EDIT":
+        if t == "départ":
+            session["step"] = "COURIER_DEPART"
+            return build_response("📍 Entrez la nouvelle adresse de départ.")
+        if t == "destination":
+            session["step"] = "COURIER_DEST"
+            return build_response("📍 Entrez la nouvelle adresse de destination.")
+        if t == "valeur":
+            session["step"] = "COURIER_VALUE"
+            return build_response("💰 Entrez la nouvelle valeur du colis (FCFA).")
+        if t == "description":
+            session["step"] = "COURIER_DESC"
+            return build_response("📦 Entrez la nouvelle description du colis.")
+        return build_response("👉 Choisissez ce que vous voulez modifier.", ["Départ", "Destination", "Valeur", "Description"])
 
     # Marketplace flow
     if session["step"] == "MARKET_SEARCH":
@@ -416,5 +452,7 @@ def handle_message(phone: str, text: str,
         return handle_marketplace_pay(session, text)
     if session["step"] == "MARKET_CONFIRM":
         return handle_marketplace_confirm(session, text)
+    if session["step"] == "MARKET_EDIT":
+        return handle_marketplace_edit(session, text)
 
     return build_response("❓ Je n’ai pas compris.\n👉 Tapez *menu* pour revenir.", MAIN_MENU_BTNS)
