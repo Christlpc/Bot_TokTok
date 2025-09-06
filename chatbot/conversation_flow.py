@@ -10,10 +10,9 @@ user_sessions: Dict[str, Dict[str, Any]] = {}
 
 WELCOME_TEXT = (
     "🚚 Bienvenue sur *TokTok Delivery* !\n"
-    "✨ Votre plateforme de livraison à Brazzaville.\n\n"
-    "🔐 Tapez votre mot de passe pour vous connecter,\n"
-    "ou envoyez *s'inscrire* pour créer un compte."
+    "✨ Votre plateforme de livraison à Brazzaville."
 )
+WELCOME_BTNS = ["Connexion", "Inscription"]
 
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma livraison", "Marketplace"]
 GREETINGS = ["bonjour", "salut", "bjr", "hello", "bonsoir", "hi"]
@@ -125,8 +124,8 @@ def handle_register_pwd(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
         return build_response("❌ Erreur réseau. Réessayez plus tard.")
 
 def handle_login(session: Dict[str, Any]) -> Dict[str, Any]:
-    session["step"] = "LOGIN_WAIT_PWD"
-    return build_response(WELCOME_TEXT)
+    session["step"] = "WELCOME_CHOICE"
+    return build_response(WELCOME_TEXT, WELCOME_BTNS)
 
 def handle_login_password(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
     try:
@@ -149,9 +148,18 @@ def handle_login_password(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
         session["auth_token"] = token
         session["step"] = "MENU"
 
+        try:
+            profile = api_request(session, "GET", "/api/v1/auth/clients/my_profile/").json()
+            first = profile.get("user", {}).get("first_name", "")
+            last = profile.get("user", {}).get("last_name", "")
+            nom = (first + " " + last).strip() or session["phone_number"]
+            session["profile"]["name"] = nom
+        except:
+            nom = session["phone_number"]
+
         logger.info(f"[LOGIN] Succès connexion pour {mask_sensitive(session['phone_number'])}")
         return build_response(
-            f"👋 Bonjour {mask_sensitive(session['phone_number'])}, heureux de vous revoir 🚚✨\n\n"
+            f"👋 Bonjour {session['profile'].get('name', nom)}, heureux de vous revoir 🚚✨\n\n"
             "👉 Choisissez une option :", MAIN_MENU_BTNS
         )
 
@@ -308,10 +316,18 @@ def handle_message(phone: str, text: str,
     if not session.get("auth_token"):
         if session["step"] == "WELCOME":
             return handle_login(session)
-        if session["step"] == "LOGIN_WAIT_PWD":
-            if t in ["sinscrire", "s'inscrire", "inscrire", "je veux m'inscrire"]:
+
+        if session["step"] == "WELCOME_CHOICE":
+            if t in ["connexion", "login"]:
+                session["step"] = "LOGIN_WAIT_PWD"
+                return build_response("🔑 Veuillez entrer votre mot de passe pour vous connecter.")
+            if t in ["inscription", "s'inscrire", "sinscrire"]:
                 return handle_register_start(session)
+            return build_response("👉 Choisissez Connexion ou Inscription.", WELCOME_BTNS)
+
+        if session["step"] == "LOGIN_WAIT_PWD":
             return handle_login_password(session, text)
+
         if session["step"] == "REGISTER_NAME":
             return handle_register_name(session, text)
         if session["step"] == "REGISTER_EMAIL":
@@ -320,7 +336,8 @@ def handle_message(phone: str, text: str,
             return handle_register_address(session, text)
         if session["step"] == "REGISTER_PWD":
             return handle_register_pwd(session, text)
-        return build_response(WELCOME_TEXT)
+
+        return build_response(WELCOME_TEXT, WELCOME_BTNS)
 
     # Menu principal
     if t in GREETINGS or t in ["menu", "accueil"]:
