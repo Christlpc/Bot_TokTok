@@ -2,10 +2,16 @@ from __future__ import annotations
 import re, os, requests, logging
 from typing import Dict, Any, Optional, List
 from urllib.parse import quote_plus
+from openai import OpenAI   # ✅ Agent IA
+from auth_core import get_session, build_response, normalize
+
 
 logger = logging.getLogger(__name__)
 
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
 user_sessions: Dict[str, Dict[str, Any]] = {}
 
 WELCOME_TEXT = (
@@ -20,6 +26,7 @@ GREETINGS = ["bonjour", "salut", "bjr", "hello", "bonsoir", "hi"]
 # ------------------------------------------------------
 # Helpers
 # ------------------------------------------------------
+
 
 def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
@@ -72,31 +79,43 @@ def mask_sensitive(value: str, visible: int = 3) -> str:
 # ------------------------------------------------------
 
 def handle_register_start(session: Dict[str, Any]) -> Dict[str, Any]:
-    session["step"] = "REGISTER_NAME"
-    return build_response("👤 Bienvenue ! Quel est votre *nom complet* ?")
+    session["step"] = "REGISTER_FIRSTNAME"
+    return build_response("👤 Bienvenue ! Quel est votre *prénom* ?")
 
-def handle_register_name(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    names = text.split(" ", 1)
-    session["profile"]["first_name"] = names[0]
-    session["profile"]["last_name"] = names[1] if len(names) > 1 else ""
+def handle_register_firstname(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["profile"]["first_name"] = text.strip().capitalize()
+    session["step"] = "REGISTER_LASTNAME"
+    return build_response("✍️ Merci. Quel est votre *nom de famille* ?")
+
+def handle_register_lastname(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    session["profile"]["last_name"] = text.strip().capitalize()
     session["step"] = "REGISTER_EMAIL"
     return build_response("📧 Merci. Quelle est votre adresse email ?")
 
 def handle_register_email(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    session["profile"]["email"] = text
+    session["profile"]["email"] = text.strip()
     session["step"] = "REGISTER_ADDRESS"
     return build_response("📍 Quelle est votre adresse principale ?")
 
 def handle_register_address(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    session["profile"]["address"] = text
+    session["profile"]["address"] = text.strip()
     session["step"] = "REGISTER_PWD"
     return build_response("🔑 Choisissez un mot de passe pour votre compte.")
 
 def handle_register_pwd(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
     try:
+        # Génération d’un username basé sur prénom.nom
+        first = session["profile"].get("first_name", "").lower()
+        last = session["profile"].get("last_name", "").lower()
+        base_username = f"{first}.{last}".strip(".")
+        if not base_username:
+            base_username = session["phone_number"]
+
+        username = base_username
+
         payload = {
             "user": {
-                "username": session["phone_number"],
+                "username": username,
                 "email": session["profile"]["email"],
                 "first_name": session["profile"]["first_name"],
                 "last_name": session["profile"]["last_name"],
@@ -166,6 +185,43 @@ def handle_login_password(session: Dict[str, Any], pwd: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[LOGIN] Exception: {str(e)}")
         return build_response("❌ Erreur réseau. Réessayez plus tard.")
+
+
+# ------------------------------------------------------
+# IA Fallback
+# ------------------------------------------------------
+
+def ai_fallback(user_message: str, phone: str) -> Dict[str, Any]:
+    """
+    Appel OpenAI pour gérer les cas où le message utilisateur
+    n’est pas reconnu par les flows.
+    """
+    try:
+        prompt = f"""
+        Tu es **TokTokBot**, l’assistant WhatsApp de TokTok Delivery 🚚.
+        Règles :
+        - Réponds en français, style WhatsApp (clair, simple, professionnel).
+        - Si la question concerne une livraison, redirige gentiment vers le menu.
+        - Toujours proposer des options claires et courtes.
+
+        Message reçu de {mask_sensitive(phone)} : "{user_message}"
+        """
+
+        completion = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message}
+            ]
+        )
+
+        ai_reply = completion.choices[0].message.content.strip()
+        return build_response(ai_reply, MAIN_MENU_BTNS)
+
+    except Exception as e:
+        logger.error(f"[AI_FALLBACK] Erreur IA: {str(e)}")
+        return build_response("❌ Je n’ai pas compris.\n👉 Tapez *menu* pour revenir.", MAIN_MENU_BTNS)
+
 
 # ------------------------------------------------------
 # Coursier / Missions
@@ -346,8 +402,10 @@ def handle_message(phone: str, text: str,
         if session["step"] == "LOGIN_WAIT_PWD":
             return handle_login_password(session, text)
 
-        if session["step"] == "REGISTER_NAME":
-            return handle_register_name(session, text)
+        if session["step"] == "REGISTER_FIRSTNAME":
+            return handle_register_firstname(session, text)
+        if session["step"] == "REGISTER_LASTNAME":
+            return handle_register_lastname(session, text)
         if session["step"] == "REGISTER_EMAIL":
             return handle_register_email(session, text)
         if session["step"] == "REGISTER_ADDRESS":
@@ -381,6 +439,7 @@ def handle_message(phone: str, text: str,
 
     if t in ["4", "marketplace"]:
         return handle_marketplace(session, text)
+
 
     # Coursier flow
     if session["step"] == "COURIER_DEPART":
@@ -455,4 +514,7 @@ def handle_message(phone: str, text: str,
     if session["step"] == "MARKET_EDIT":
         return handle_marketplace_edit(session, text)
 
-    return build_response("❓ Je n’ai pas compris.\n👉 Tapez *menu* pour revenir.", MAIN_MENU_BTNS)
+    # --------------------------------------------------
+    # Fallback IA
+    # --------------------------------------------------
+    return ai_fallback(text, phone)
