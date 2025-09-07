@@ -7,9 +7,9 @@ from .utils import (
     send_whatsapp_location_request,
     send_whatsapp_media_url
 )
-from conversation_flow import handle_message, get_session
-from router import handle_incoming           # ⇦ point d'entrée unique (login commun + flows)
-from auth_core import get_session, normalize # ⇦ sessions partagées + helper
+from .conversation_flow import handle_message, get_session
+from .router import handle_incoming           # ⇦ point d'entrée unique (login commun + flows)
+from .auth_core import get_session, normalize # ⇦ sessions partagées + helper
 
 logger = logging.getLogger(__name__)
 VERIFY_TOKEN = "toktok_secret"
