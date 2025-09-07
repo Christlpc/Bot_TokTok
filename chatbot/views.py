@@ -1,13 +1,13 @@
 import json, logging
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from .utils import (
+from utils import (
     send_whatsapp_message,
     send_whatsapp_buttons,
     send_whatsapp_location_request,
     send_whatsapp_media_url
 )
-from .conversation_flow import handle_message, get_session
+from conversation_flow import handle_message, get_session
 from router import handle_incoming           # ⇦ point d'entrée unique (login commun + flows)
 from auth_core import get_session, normalize # ⇦ sessions partagées + helper
 

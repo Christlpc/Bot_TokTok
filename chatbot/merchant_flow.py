@@ -1,481 +1,363 @@
-# merchant_flow.py
-# -*- coding: utf-8 -*-
-"""
-Merchant (Entreprise) conversation flow for TokTok Delivery (Marketplace side).
-- Compatible with a WhatsApp webhook handler.
-- Uses the Delivery Platform API (OpenAPI 3, Congo) endpoints found in /api/v1.
-- Keeps UI minimal (buttons/options) for WhatsApp UX.
-
-Assumptions
------------
-- A session store exists (dict-like) keyed by phone (or WA user id).
-- A `send_whatsapp_message(to, text)` util exists (see utils.py provided by user).
-- ENV variables: TOKTOK_BASE_URL, TOKTOK_API_KEY (optional), WHATSAPP_* already configured.
-- This module exposes:
-    - handle_merchant_message(phone: str, text: str) -> dict(response, buttons)
-    - start_merchant_login(phone: str) -> dict(...)
-    - reset_merchant_session(phone: str) -> None
-
-Author: Projet TokTok (GPT Assistant)
-"""
+# marchand_flow.py
 from __future__ import annotations
-import os, re, json, logging, requests
+import os, re, logging, requests
 from typing import Dict, Any, Optional, List
+from auth_core import get_session, build_response, normalize
 
 logger = logging.getLogger(__name__)
 
-API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com").rstrip("/")
-API_KEY  = os.getenv("TOKTOK_API_KEY", "")  # Optional header if your API uses it
+API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
+TIMEOUT  = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 
-# -------------------------------
-# Simple in-memory session store
-# -------------------------------
-_SESS: Dict[str, Dict[str, Any]] = {}
+MAIN_BTNS   = ["Créer produit", "Mes produits", "Commandes"]
+ORDER_BTNS  = ["Accepter", "Préparer", "Expédier"]
+PRODUCT_BTNS = ["Publier", "Mettre à jour", "Supprimer"]  # (Supprimer pas implémenté ici par défaut)
 
-def _S(phone: str) -> Dict[str, Any]:
-    s = _SESS.get(phone) or {}
-    _SESS[phone] = s
-    s.setdefault("role", "merchant")
-    s.setdefault("auth", {"access": None})
-    s.setdefault("state", "INIT")
-    s.setdefault("tmp", {})
-    return s
+STATUTS_CMD = {"nouvelle","acceptee","preparee","expediee","livree","annulee"}
 
-def reset_merchant_session(phone: str) -> None:
-    _SESS.pop(phone, None)
-
-# -------------------------------
-# Helpers
-# -------------------------------
-def normalize(s: Optional[str]) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
-
-def build_response(text: str, buttons: Optional[List[str]] = None) -> Dict[str, Any]:
-    r = {"response": text}
-    if buttons:
-        r["buttons"] = buttons
-    return r
-
-def _auth_headers(token: Optional[str] = None) -> Dict[str, str]:
-    h = {"Content-Type": "application/json"}
-    if API_KEY:
-        h["X-API-KEY"] = API_KEY
-    if token:
-        h["Authorization"] = f"Bearer {token}"
-    return h
-
-def _r(method: str, path: str, token: Optional[str] = None, **kwargs) -> requests.Response:
+# -----------------------------
+# Utils API
+# -----------------------------
+def api_request(session: Dict[str, Any], method: str, path: str, **kwargs) -> requests.Response:
     url = f"{API_BASE}{path}"
     headers = kwargs.pop("headers", {})
-    headers.update(_auth_headers(token))
-    resp = requests.request(method, url, headers=headers, timeout=20, **kwargs)
-    # Log and raise if necessary
-    try:
-        j = resp.json()
-        logger.debug("API %s %s -> %s", method, path, json.dumps(j)[:500])
-    except Exception:
-        logger.debug("API %s %s -> %s", method, path, resp.text[:300])
-    if not resp.ok:
-        raise requests.HTTPError(f"{resp.status_code} {resp.reason}: {resp.text}")
-    return resp
+    tok = (session.get("auth") or {}).get("access")
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
 
-# -------------------------------
-# API Client (subset for merchants)
-# -------------------------------
-class MerchantAPI:
-    @staticmethod
-    def login(email: str, password: str) -> Dict[str, Any]:
-        # POST /api/v1/auth/login/
-        payload = {"email": email, "password": password}
-        r = _r("POST", "/api/v1/auth/login/", json=payload)
-        return r.json()  # expects access, refresh, user info
+def _ensure_merchant_id(session: Dict[str, Any]) -> Optional[int]:
+    me = api_request(session, "GET", "/api/v1/auth/marchands/my_profile/")
+    if me.status_code != 200:
+        return None
+    mid = me.json().get("id")
+    session["user"]["id"] = mid
+    return mid
 
-    @staticmethod
-    def my_profile(token: str) -> Dict[str, Any]:
-        # GET /api/v1/auth/entreprises/my_profile/
-        r = _r("GET", "/api/v1/auth/entreprises/my_profile/", token=token)
-        return r.json()
+# -----------------------------
+# Actions Boutique
+# -----------------------------
+def toggle_boutique(session: Dict[str, Any]) -> Dict[str, Any]:
+    mid = session.get("user", {}).get("id") or _ensure_merchant_id(session)
+    if not mid:
+        return build_response("❌ Profil marchand introuvable. Reconnectez-vous.")
+    r = api_request(session, "POST", f"/api/v1/auth/marchands/{mid}/toggle_actif/", json={})
+    if r.status_code not in (200, 202):
+        return build_response("❌ Impossible de basculer l’état de la boutique.", MAIN_BTNS)
+    me = api_request(session, "GET", "/api/v1/auth/marchands/my_profile/")
+    actif = False
+    if me.status_code == 200:
+        actif = bool(me.json().get("actif", False))
+    return build_response(f"🏬 Boutique : {'🟢 Ouverte' if actif else '🔴 Fermée'}.", MAIN_BTNS)
 
-    # Products
-    @staticmethod
-    def list_categories(token: str) -> List[Dict[str, Any]]:
-        r = _r("GET", "/api/v1/marketplace/categories/", token=token)
-        return r.json().get("results", []) if isinstance(r.json(), dict) else r.json()
+# -----------------------------
+# Produits
+# -----------------------------
+def list_my_products(session: Dict[str, Any]) -> Dict[str, Any]:
+    r = api_request(session, "GET", "/api/v1/marketplace/produits/?mine=1")
+    if r.status_code != 200:
+        return build_response("❌ Erreur lors du chargement des produits.", MAIN_BTNS)
+    arr = r.json() or []
+    if isinstance(arr, dict) and "results" in arr:
+        arr = arr["results"]
+    if not arr:
+        return build_response("📦 Aucun produit publié.\n👉 Tapez *Créer produit* pour ajouter un article.", ["Créer produit","Commandes","Menu"])
+    lines = []
+    for p in arr[:5]:
+        pid = p.get("id")
+        nom = p.get("nom") or p.get("name") or f"Produit {pid}"
+        prix = p.get("prix") or p.get("price") or 0
+        stock = p.get("stock", "-")
+        actif = "✅" if p.get("actif", True) else "⛔"
+        lines.append(f"#{pid} • {nom} • {prix} XAF • stock {stock} {actif}")
+    return build_response("🗂️ *Mes produits*\n" + "\n".join(lines) + "\n\n👉 *Détail <id>* ou *Edit <id>*", ["Créer produit","Commandes","Menu"])
 
-    @staticmethod
-    def list_products(token: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
-        params = {"page": page, "page_size": page_size}
-        r = _r("GET", "/api/v1/marketplace/produits/", token=token, params=params)
-        return r.json()
+def product_detail(session: Dict[str, Any], pid: str) -> Dict[str, Any]:
+    r = api_request(session, "GET", f"/api/v1/marketplace/produits/{pid}/")
+    if r.status_code != 200:
+        return build_response("❌ Produit introuvable.", MAIN_BTNS)
+    p = r.json()
+    txt = (
+        f"📄 *Produit #{p.get('id')}*\n"
+        f"• Nom: {p.get('nom') or p.get('name')}\n"
+        f"• Prix: {p.get('prix') or p.get('price')} XAF\n"
+        f"• Catégorie: {p.get('categorie') or p.get('category','-')}\n"
+        f"• Stock: {p.get('stock','-')}\n"
+        f"• Actif: {'Oui' if p.get('actif', True) else 'Non'}\n"
+        f"• Desc: {p.get('description','-')}\n"
+    )
+    session.setdefault("ctx", {})["current_product_id"] = p.get("id")
+    return build_response(txt, ["Mettre à jour","Mes produits","Menu"])
 
-    @staticmethod
-    def create_product(token: str, nom: str, prix: float, categorie_id: int, description: str = "", stock: int = 0) -> Dict[str, Any]:
-        payload = {
-            "nom": nom,
-            "prix": prix,
-            "categorie_id": categorie_id,
-            "description": description,
-            "stock": stock,
-        }
-        r = _r("POST", "/api/v1/marketplace/produits/", token=token, json=payload)
-        return r.json()
+def product_patch(session: Dict[str, Any], pid: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+    r = api_request(session, "PATCH", f"/api/v1/marketplace/produits/{pid}/", json=fields)
+    if r.status_code not in (200, 202):
+        return build_response("❌ Échec mise à jour produit.")
+    return product_detail(session, pid)
 
-    @staticmethod
-    def update_product(token: str, produit_id: int, **fields) -> Dict[str, Any]:
-        r = _r("PATCH", f"/api/v1/marketplace/produits/{produit_id}/", token=token, json=fields)
-        return r.json()
+# Wizard création produit
+def create_start(session: Dict[str, Any]) -> Dict[str, Any]:
+    session["step"] = "PROD_NAME"
+    session["ctx"]["new_product"] = {
+        "nom": None,
+        "prix": None,
+        "categorie": None,
+        "stock": None,
+        "description": None,
+        "image_url": None,
+        "actif": True,
+    }
+    return build_response("🆕 *Création produit* — Quel est le *nom* de l’article ?")
 
-    @staticmethod
-    def delete_product(token: str, produit_id: int) -> None:
-        _r("DELETE", f"/api/v1/marketplace/produits/{produit_id}/", token=token)
+def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[str]) -> Dict[str, Any]:
+    np = session["ctx"]["new_product"]
+    step = session["step"]
 
-    @staticmethod
-    def update_stock(token: str, produit_id: int, stock: int) -> Dict[str, Any]:
-        payload = {"stock": stock}
-        r = _r("POST", f"/api/v1/marketplace/produits/{produit_id}/update_stock/", token=token, json=payload)
-        return r.json()
+    if step == "PROD_NAME":
+        np["nom"] = t
+        session["step"] = "PROD_PRICE"
+        return build_response("💰 *Prix* (XAF) ? (ex: 4500)")
 
-    # Orders
-    @staticmethod
-    def list_orders(token: str, statut: Optional[str] = None, only_mine: bool = True) -> Dict[str, Any]:
-        path = "/api/v1/marketplace/commandes/mes_commandes/" if only_mine else "/api/v1/marketplace/commandes/"
-        params = {"statut": statut} if statut else {}
-        r = _r("GET", path, token=token, params=params)
-        return r.json()
+    if step == "PROD_PRICE":
+        amount = re.sub(r"[^0-9]", "", t)
+        if not amount:
+            return build_response("⚠️ Entrez un nombre. Ex: 4500")
+        np["prix"] = int(amount)
+        session["step"] = "PROD_CATEGORY"
+        return build_response("🏷️ *Catégorie* ? (ex: Restauration, Électro…)")
 
-    @staticmethod
-    def confirm_order(token: str, commande_id: int) -> Dict[str, Any]:
-        r = _r("POST", f"/api/v1/marketplace/commandes/{commande_id}/confirmer/", token=token, json={})
-        return r.json()
+    if step == "PROD_CATEGORY":
+        np["categorie"] = t
+        session["step"] = "PROD_STOCK"
+        return build_response("📦 *Stock* initial ? (ex: 10)")
 
-    @staticmethod
-    def cancel_order(token: str, commande_id: int, motif: str = "") -> Dict[str, Any]:
-        payload = {"motif": motif}
-        r = _r("POST", f"/api/v1/marketplace/commandes/{commande_id}/annuler/", token=token, json=payload)
-        return r.json()
+    if step == "PROD_STOCK":
+        q = re.sub(r"[^0-9]", "", t)
+        if not q:
+            return build_response("⚠️ Entrez un entier. Ex: 10")
+        np["stock"] = int(q)
+        session["step"] = "PROD_DESC"
+        return build_response("📝 *Description* courte ?")
 
-    # Stats (optional nice-to-have)
-    @staticmethod
-    def revenus_resume(token: str) -> Dict[str, Any]:
-        r = _r("GET", "/api/v1/paiements/revenus/resume_mensuel/", token=token)
-        return r.json()
+    if step == "PROD_DESC":
+        np["description"] = t
+        session["step"] = "PROD_IMAGE"
+        return build_response("🖼️ Envoyez *une image* (ou tapez *Passer*)")
 
-# -------------------------------
-# Conversation Flow (State Machine)
-# -------------------------------
-WELCOME = (
-    "👋 *TokTok Marchands* \n"
-    "Gérez vos *commandes* et *produits* directement ici.\n"
-    "Veuillez vous *connecter* pour continuer."
-)
-MENU = [
-    "📦 Commandes",
-    "🛍️ Produits",
-    "📊 Statistiques",
-    "⚙️ Paramètres",
-    "🚪 Déconnexion",
-]
+    if step == "PROD_IMAGE":
+        if media_url and media_url.startswith("http"):
+            np["image_url"] = media_url
+        # recap
+        session["step"] = "PROD_CONFIRM"
+        recap = (
+            "🧾 *Récap produit* :\n"
+            f"• Nom: {np['nom']}\n"
+            f"• Prix: {np['prix']} XAF\n"
+            f"• Catégorie: {np['categorie']}\n"
+            f"• Stock: {np['stock']}\n"
+            f"• Desc: {np['description']}\n"
+            f"• Image: {'Oui' if np['image_url'] else 'Non'}\n\n"
+            "👉 *Publier* pour créer, ou *Modifier*."
+        )
+        return build_response(recap, ["Publier","Modifier","Annuler"])
 
-def start_merchant_login(phone: str) -> Dict[str, Any]:
-    s = _S(phone)
-    s["state"] = "LOGIN_EMAIL"
+    if step == "PROD_CONFIRM":
+        tt = t.lower()
+        if tt in {"publier","creer","confirmer"}:
+            return create_submit(session)
+        if tt in {"modifier","edit"}:
+            session["step"] = "PROD_NAME"
+            return build_response("✏️ Reprenons : quel est le *nom* ?")
+        if tt in {"annuler","cancel"}:
+            session["step"] = "MARCHAND_MENU"
+            session["ctx"].pop("new_product", None)
+            return build_response("❌ Création annulée.", MAIN_BTNS)
+        return build_response("👉 Répondez par *Publier*, *Modifier* ou *Annuler*.", ["Publier","Modifier","Annuler"])
+
+    # fallback
+    return build_response("Tapez *Publier* pour créer, ou *Modifier* pour reprendre.")
+
+def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
+    np = session["ctx"]["new_product"]
+    payload = {
+        "nom": np["nom"],
+        "prix": np["prix"],
+        "categorie": np["categorie"],
+        "stock": np["stock"],
+        "description": np["description"],
+        "actif": True,
+    }
+    if np.get("image_url"):
+        payload["image_url"] = np["image_url"]
+    r = api_request(session, "POST", "/api/v1/marketplace/produits/", json=payload)
+    if r.status_code not in (200, 201):
+        return build_response("❌ Échec de création du produit. Réessayez.")
+    p = r.json()
+    session["step"] = "MARCHAND_MENU"
+    session["ctx"].pop("new_product", None)
+    return build_response(f"✅ Produit #{p.get('id')} *{p.get('nom')}* créé.", ["Mes produits","Commandes","Menu"])
+
+# -----------------------------
+# Commandes
+# -----------------------------
+def list_my_orders(session: Dict[str, Any]) -> Dict[str, Any]:
+    r = api_request(session, "GET", "/api/v1/marketplace/commandes/?mine=1")
+    if r.status_code != 200:
+        return build_response("❌ Erreur lors du chargement des commandes.", MAIN_BTNS)
+    arr = r.json() or []
+    if isinstance(arr, dict) and "results" in arr:
+        arr = arr["results"]
+    if not arr:
+        return build_response("📭 Aucune commande pour le moment.", MAIN_BTNS)
+    lines = []
+    for c in arr[:5]:
+        cid = c.get("id")
+        statut = c.get("statut") or "-"
+        total = c.get("total_xaf") or c.get("montant") or "-"
+        client = (c.get("client") or {}).get("username") or c.get("client_nom") or "-"
+        lines.append(f"#{cid} • {statut} • {total} XAF • {client}")
     return build_response(
-        "🔐 Connexion marchand\nEntrez votre *email* :",
-        buttons=None
+        "🧾 *Mes commandes*\n" + "\n".join(lines) + "\n\n👉 *Commande <id>* pour le détail",
+        ["Commande 123","Menu","Mes produits"]
     )
 
-def _ensure_auth(phone: str) -> Optional[str]:
-    s = _S(phone)
-    token = s.get("auth", {}).get("access")
-    return token
+def order_detail(session: Dict[str, Any], cid: str) -> Dict[str, Any]:
+    r = api_request(session, "GET", f"/api/v1/marketplace/commandes/{cid}/")
+    if r.status_code != 200:
+        return build_response("❌ Commande introuvable.", MAIN_BTNS)
+    c = r.json()
+    items = c.get("lignes") or c.get("items") or []
+    lst = []
+    for it in items[:6]:
+        nom = (it.get("produit") or {}).get("nom") or it.get("nom","-")
+        qte = it.get("quantite") or it.get("qty") or 1
+        px  = it.get("prix_unitaire") or it.get("prix") or "-"
+        lst.append(f"• {nom} x{qte} — {px} XAF")
+    txt = (
+        f"📄 *Commande #{c.get('id')}*\n"
+        f"• Statut: {c.get('statut')}\n"
+        f"• Total: {c.get('total_xaf') or c.get('montant','-')} XAF\n"
+        f"• Client: {(c.get('client') or {}).get('username') or c.get('client_nom','-')}\n"
+        f"• Adresse: {c.get('adresse_livraison','-')}\n"
+        f"• Téléphone: {c.get('telephone_livraison','-')}\n"
+        + ("\n".join(lst) if lst else "\n• (Pas de lignes)")
+        + "\n\nActions: *Accepter*, *Préparer*, *Expédier*, *Livrée*, *Annuler*"
+    )
+    session.setdefault("ctx", {})["current_order_id"] = c.get("id")
+    return build_response(txt, ["Accepter","Préparer","Expédier"])
 
-def _goto_menu(phone: str) -> Dict[str, Any]:
-    s = _S(phone)
-    s["state"] = "MENU"
-    return build_response("✅ Connecté. Que souhaitez-vous faire ?", MENU)
+def order_update_status(session: Dict[str, Any], cid: str, statut: str) -> Dict[str, Any]:
+    statut = statut.lower()
+    if statut == "accepter":
+        statut = "acceptee"
+    if statut == "préparer" or statut == "preparer":
+        statut = "preparee"
+    if statut == "expédier" or statut == "expedier":
+        statut = "expediee"
+    if statut == "livrée" or statut == "livree":
+        statut = "livree"
+    if statut == "annuler":
+        statut = "annulee"
+    if statut not in STATUTS_CMD:
+        return build_response("❌ Statut inconnu. (Accepter/Préparer/Expédier/Livrée/Annuler)")
 
-def _format_orders_list(payload: Dict[str, Any]) -> str:
-    items = payload.get("results") if isinstance(payload, dict) else payload
-    if not items:
-        return "Aucune commande trouvée."
-    lines = []
-    for cmd in items[:10]:
-        cid = cmd.get("id")
-        statut = cmd.get("statut", "inconnu")
-        total = cmd.get("total", "—")
-        client = (cmd.get("client") or {}).get("nom", "Client")
-        lines.append(f"• #{cid} – {client} – {total} – {statut}")
-    return "\n".join(lines)
+    r = api_request(session, "POST", f"/api/v1/marketplace/commandes/{cid}/update_statut/", json={"statut": statut})
+    if r.status_code not in (200, 202):
+        return build_response("❌ Échec de mise à jour du statut.")
+    return build_response(f"✅ Commande #{cid} → *{statut}*.", ["Commandes","Mes produits","Menu"])
 
-def _format_products_list(payload: Dict[str, Any]) -> str:
-    items = payload.get("results") if isinstance(payload, dict) else payload
-    if not items:
-        return "Aucun produit."
-    lines = []
-    for p in items[:10]:
-        lines.append(f"• [{p.get('id')}] {p.get('nom')} – {p.get('prix')} FCFA – stock:{p.get('stock', 0)}")
-    return "\n".join(lines)
+# -----------------------------
+# Router texte
+# -----------------------------
+def handle_message(phone: str, text: str,
+                   *,
+                   lat: Optional[float] = None,
+                   lng: Optional[float] = None,
+                   media_url: Optional[str] = None) -> Dict[str, Any]:
+    t = normalize(text).lower()
+    session = get_session(phone)
 
-def handle_merchant_message(phone: str, text: str) -> Dict[str, Any]:
-    text_n = normalize(text).lower()
-    s = _S(phone)
+    # Salutations/Menu
+    if t in {"menu","bonjour","salut","hello","hi","accueil"}:
+        session["step"] = "MARCHAND_MENU"
+        return build_response("🏪 *Menu marchand* — choisissez :", MAIN_BTNS)
 
-    # Entry points
-    if s["state"] == "INIT":
-        return build_response(WELCOME, ["🔑 Connexion"])
+    # Toggle boutique (ouvert/fermé)
+    if t in {"basculer","toggle","ouvrir","fermer","basculer ouvert","basculer ferme"} or t.startswith("basculer"):
+        return toggle_boutique(session)
 
-    if text_n in ("connexion", "🔑 connexion"):
-        return start_merchant_login(phone)
+    # Produits
+    if t in {"mes produits","produits","catalogue"}:
+        session["step"] = "MARCHAND_MENU"
+        return list_my_products(session)
 
-    # Login flow
-    if s["state"] == "LOGIN_EMAIL":
-        s["tmp"]["email"] = normalize(text)
-        s["state"] = "LOGIN_PASSWORD"
-        return build_response("Entrez votre *mot de passe* :", None)
+    if t in {"créer produit","creer produit","nouveau produit","ajouter produit"}:
+        return create_start(session)
 
-    if s["state"] == "LOGIN_PASSWORD":
-        email = s["tmp"].get("email")
-        password = text
-        try:
-            auth = MerchantAPI.login(email, password)
-            s["auth"]["access"] = auth.get("access")
-            s["state"] = "MENU"
-            return _goto_menu(phone)
-        except Exception as e:
-            logger.exception("Login failed")
-            s["state"] = "INIT"
-            return build_response("❌ Échec de connexion. Réessayez : 'Connexion'", ["🔑 Connexion"])
+    if t.startswith("detail ") or t.startswith("détail "):
+        pid = re.sub(r"[^0-9]", "", t.split(" ",1)[1])
+        if not pid:
+            return build_response("❌ Id manquant. Ex: *Détail 123*")
+        return product_detail(session, pid)
 
-    # Require auth afterward
-    token = _ensure_auth(phone)
-    if not token:
-        return build_response("Session expirée. Veuillez vous reconnecter.", ["🔑 Connexion"])
+    if t.startswith("edit "):
+        pid = re.sub(r"[^0-9]", "", t.split(" ",1)[1])
+        if not pid:
+            return build_response("❌ Id manquant. Ex: *Edit 123*")
+        session["ctx"]["current_product_id"] = int(pid)
+        session["step"] = "PROD_EDIT_FIELD"
+        return build_response("✏️ Quel champ modifier ? (*prix*, *stock*, *nom*, *description*, *categorie*)")
 
-    # Menu routing
-    if s["state"] == "MENU":
-        if text_n.startswith("📦") or "commande" in text_n:
-            s["state"] = "ORDERS_MENU"
-            return build_response("📦 *Commandes* – choisissez :", ["En attente", "En cours", "Historique", "⬅️ Retour"])
-        if text_n.startswith("🛍️") or "produit" in text_n:
-            s["state"] = "PRODUCTS_MENU"
-            return build_response("🛍️ *Produits* – choisissez :", ["Lister", "Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-        if text_n.startswith("📊") or "stat" in text_n:
-            try:
-                stats = MerchantAPI.revenus_resume(token)
-                txt = f"📊 *Revenus (mois)*\nTotal: {stats.get('total', '—')} FCFA\nCommandes: {stats.get('nb_commandes', '—')}"
-            except Exception:
-                txt = "📊 Statistiques indisponibles pour le moment."
-            return build_response(txt, ["⬅️ Retour"])
-        if text_n.startswith("⚙️") or "param" in text_n:
-            return build_response("⚙️ Paramètres (à gérer dans le backoffice pour l’instant).", ["⬅️ Retour"])
-        if text_n.startswith("🚪") or "deconn" in text_n:
-            reset_merchant_session(phone)
-            return build_response("Vous êtes déconnecté.", ["🔑 Connexion"])
-        # default
-        return build_response("Choisissez une option :", MENU)
+    if session.get("step") in {"PROD_NAME","PROD_PRICE","PROD_CATEGORY","PROD_STOCK","PROD_DESC","PROD_IMAGE","PROD_CONFIRM"}:
+        # Wizard création produit
+        return handle_create_wizard(session, text, media_url)
 
-    # Orders sub-flow
-    if s["state"] == "ORDERS_MENU":
-        if text_n.startswith("en attente"):
-            try:
-                data = MerchantAPI.list_orders(token, statut="en_attente")
-                lst = _format_orders_list(data)
-                s["state"] = "ORDERS_ACTION"
-                return build_response(f"🟡 *En attente*\n{lst}\n\nAction ? (ex: `confirmer 123` ou `annuler 123 raison`)",
-                                      ["⬅️ Retour", "↻ Rafraîchir"])
-            except Exception:
-                return build_response("Erreur lors du chargement des commandes.", ["⬅️ Retour"])
-        if text_n.startswith("en cours"):
-            try:
-                data = MerchantAPI.list_orders(token, statut="en_cours")
-                lst = _format_orders_list(data)
-                s["state"] = "ORDERS_ACTION"
-                return build_response(f"🔵 *En cours*\n{lst}\n\nAction ? (ex: `confirmer 123`)",
-                                      ["⬅️ Retour", "↻ Rafraîchir"])
-            except Exception:
-                return build_response("Erreur lors du chargement des commandes.", ["⬅️ Retour"])
-        if text_n.startswith("historique"):
-            try:
-                data = MerchantAPI.list_orders(token, statut="livree", only_mine=True)
-                lst = _format_orders_list(data)
-                s["state"] = "ORDERS_ACTION"
-                return build_response(f"✅ *Historique livrées*\n{lst}", ["⬅️ Retour"])
-            except Exception:
-                return build_response("Erreur lors du chargement de l’historique.", ["⬅️ Retour"])
-        if "retour" in text_n:
-            s["state"] = "MENU"
-            return _goto_menu(phone)
+    if session.get("step") == "PROD_EDIT_FIELD":
+        field = t
+        allowed = {"prix","stock","nom","description","categorie"}
+        if field not in allowed:
+            return build_response("👉 Choisissez parmi *prix*, *stock*, *nom*, *description*, *categorie*.")
+        session["ctx"]["edit_field"] = field
+        session["step"] = "PROD_EDIT_VALUE"
+        return build_response(f"Entrez la *nouvelle valeur* pour {field} :")
 
-    if s["state"] == "ORDERS_ACTION":
-        if text_n.startswith("↻"):
-            s["state"] = "ORDERS_MENU"
-            return build_response("Rafraîchi. Choisissez :", ["En attente", "En cours", "Historique", "⬅️ Retour"])
-        if text_n.startswith("confirmer"):
-            m = re.search(r"confirmer\s+(\d+)", text_n)
-            if not m:
-                return build_response("Format attendu: `confirmer <id>`", ["⬅️ Retour"])
-            cid = int(m.group(1))
-            try:
-                res = MerchantAPI.confirm_order(token, cid)
-                return build_response(f"✅ Commande #{cid} confirmée.\nUn livreur sera assigné automatiquement.", ["⬅️ Retour", "↻ Rafraîchir"])
-            except Exception:
-                return build_response("❌ Échec confirmation.", ["⬅️ Retour"])
-        if text_n.startswith("annuler"):
-            m = re.search(r"annuler\s+(\d+)\s*(.*)", text_n)
-            if not m:
-                return build_response("Format attendu: `annuler <id> <motif>`", ["⬅️ Retour"])
-            cid = int(m.group(1)); motif = m.group(2) or "Non précisé"
-            try:
-                res = MerchantAPI.cancel_order(token, cid, motif)
-                return build_response(f"🛑 Commande #{cid} annulée.", ["⬅️ Retour", "↻ Rafraîchir"])
-            except Exception:
-                return build_response("❌ Échec annulation.", ["⬅️ Retour"])
-        if "retour" in text_n:
-            s["state"] = "ORDERS_MENU"
-            return build_response("Choisissez :", ["En attente", "En cours", "Historique", "⬅️ Retour"])
+    if session.get("step") == "PROD_EDIT_VALUE":
+        pid = session["ctx"].get("current_product_id")
+        field = session["ctx"].get("edit_field")
+        if not pid or not field:
+            session["step"] = "MARCHAND_MENU"
+            return build_response("❌ Contexte perdu. Reprenez avec *Mes produits*.")
+        value: Any = text
+        if field in {"prix","stock"}:
+            num = re.sub(r"[^0-9]", "", text)
+            if not num:
+                return build_response("⚠️ Entrez un nombre valide.")
+            value = int(num)
+        fields = { "prix": "prix", "stock": "stock", "nom": "nom", "description": "description", "categorie": "categorie" }
+        session["step"] = "MARCHAND_MENU"
+        return product_patch(session, str(pid), {fields[field]: value})
 
-    # Products sub-flow
-    if s["state"] == "PRODUCTS_MENU":
-        if text_n.startswith("lister"):
-            try:
-                data = MerchantAPI.list_products(token)
-                lst = _format_products_list(data)
-                s["state"] = "PRODUCTS_MENU"
-                return build_response(f"📋 *Produits*\n{lst}", ["Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-            except Exception:
-                return build_response("Erreur lors du listing produits.", ["⬅️ Retour"])
-        if text_n.startswith("ajouter"):
-            s["state"] = "PRODUCT_ADD_NAME"
-            s["tmp"] = {}
-            return build_response("Nom du produit ?", None)
-        if text_n.startswith("modifier"):
-            s["state"] = "PRODUCT_EDIT_ID"
-            return build_response("ID du produit à modifier ?", None)
-        if text_n.startswith("supprimer"):
-            s["state"] = "PRODUCT_DELETE_ID"
-            return build_response("ID du produit à supprimer ?", None)
-        if text_n.startswith("stock"):
-            s["state"] = "PRODUCT_STOCK_ID"
-            return build_response("ID du produit pour mise à jour du stock ?", None)
-        if "retour" in text_n:
-            s["state"] = "MENU"
-            return _goto_menu(phone)
+    # Commandes
+    if t in {"commandes","mes commandes"}:
+        return list_my_orders(session)
 
-    if s["state"] == "PRODUCT_ADD_NAME":
-        s["tmp"]["nom"] = normalize(text)
-        s["state"] = "PRODUCT_ADD_PRICE"
-        return build_response("Prix (en FCFA) ?", None)
+    if t.startswith("commande "):
+        cid = re.sub(r"[^0-9]", "", t.split(" ",1)[1])
+        if not cid:
+            return build_response("❌ Id manquant. Ex: *Commande 123*")
+        return order_detail(session, cid)
 
-    if s["state"] == "PRODUCT_ADD_PRICE":
-        # Accept formats: 80000, 80 000, 80.000
-        price_txt = normalize(text).replace(" ", "").replace(".", "")
-        if not price_txt.isdigit():
-            return build_response("Montant invalide. Exemple: 80 000", None)
-        s["tmp"]["prix"] = float(price_txt)
-        # load categories quick
-        try:
-            cats = MerchantAPI.list_categories(_ensure_auth(phone))
-            s["tmp"]["_cats"] = {str(c.get("id")): c.get("nom") for c in cats}
-            cats_list = ", ".join([f"{cid}:{name}" for cid, name in list(s['tmp']['_cats'].items())[:10]])
-            s["state"] = "PRODUCT_ADD_CATEGORY"
-            return build_response(f"ID Catégorie ? (ex: {cats_list})", None)
-        except Exception:
-            s["state"] = "PRODUCT_ADD_CATEGORY"
-            return build_response("ID Catégorie ?", None)
+    if t in {"accepter","préparer","preparer","expédier","expedier","livrée","livree","annuler"}:
+        cid = (session.get("ctx") or {}).get("current_order_id")
+        if not cid:
+            return build_response("❌ Aucune commande sélectionnée. Envoie *Commande <id>* d’abord.", ["Commandes","Menu"])
+        return order_update_status(session, str(cid), t)
 
-    if s["state"] == "PRODUCT_ADD_CATEGORY":
-        cat = normalize(text)
-        s["tmp"]["categorie_id"] = int(re.sub(r"[^0-9]", "", cat) or "0")
-        s["state"] = "PRODUCT_ADD_DESC"
-        return build_response("Description (optionnel) ?", None)
-
-    if s["state"] == "PRODUCT_ADD_DESC":
-        s["tmp"]["description"] = normalize(text)
-        s["state"] = "PRODUCT_ADD_STOCK"
-        return build_response("Stock initial (nombre) ?", None)
-
-    if s["state"] == "PRODUCT_ADD_STOCK":
-        stock_txt = re.sub(r"[^0-9]", "", normalize(text))
-        if not stock_txt:
-            stock = 0
-        else:
-            stock = int(stock_txt)
-        try:
-            token = _ensure_auth(phone)
-            created = MerchantAPI.create_product(token, s["tmp"]["nom"], s["tmp"]["prix"], s["tmp"]["categorie_id"], s["tmp"]["description"], stock)
-            s["state"] = "PRODUCTS_MENU"
-            return build_response(f"✅ Produit créé: [{created.get('id')}] {created.get('nom')}", ["Lister", "Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-        except Exception as e:
-            logger.exception("create_product failed")
-            s["state"] = "PRODUCTS_MENU"
-            return build_response("❌ Échec création produit.", ["Lister", "Ajouter", "⬅️ Retour"])
-
-    if s["state"] == "PRODUCT_EDIT_ID":
-        pid_txt = re.sub(r"[^0-9]", "", normalize(text))
-        if not pid_txt:
-            return build_response("ID invalide.", ["⬅️ Retour"])
-        s["tmp"]["pid"] = int(pid_txt)
-        s["state"] = "PRODUCT_EDIT_FIELD"
-        return build_response("Quel champ ? (nom / prix / description / categorie_id)", None)
-
-    if s["state"] == "PRODUCT_EDIT_FIELD":
-        field = normalize(text).lower()
-        if field not in ("nom","prix","description","categorie_id"):
-            return build_response("Champ invalide. Choisissez: nom / prix / description / categorie_id", None)
-        s["tmp"]["field"] = field
-        s["state"] = "PRODUCT_EDIT_VALUE"
-        return build_response(f"Nouvelle valeur pour *{field}* ?", None)
-
-    if s["state"] == "PRODUCT_EDIT_VALUE":
-        field = s["tmp"]["field"]
-        val = normalize(text)
-        try:
-            token = _ensure_auth(phone)
-            pid = s["tmp"]["pid"]
-            payload = {}
-            if field == "prix":
-                val = float(val.replace(" ","").replace(".",""))
-            if field == "categorie_id":
-                val = int(re.sub(r"[^0-9]", "", val) or "0")
-            payload[field] = val
-            updated = MerchantAPI.update_product(token, pid, **payload)
-            s["state"] = "PRODUCTS_MENU"
-            return build_response(f"✅ Produit [{pid}] mis à jour.", ["Lister", "Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-        except Exception:
-            return build_response("❌ Échec modification.", ["⬅️ Retour"])
-
-    if s["state"] == "PRODUCT_DELETE_ID":
-        pid_txt = re.sub(r"[^0-9]", "", normalize(text))
-        if not pid_txt:
-            return build_response("ID invalide.", ["⬅️ Retour"])
-        pid = int(pid_txt)
-        try:
-            MerchantAPI.delete_product(token, pid)
-            s["state"] = "PRODUCTS_MENU"
-            return build_response(f"🗑️ Produit [{pid}] supprimé.", ["Lister", "Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-        except Exception:
-            return build_response("❌ Échec suppression.", ["⬅️ Retour"])
-
-    if s["state"] == "PRODUCT_STOCK_ID":
-        pid_txt = re.sub(r"[^0-9]", "", normalize(text))
-        if not pid_txt:
-            return build_response("ID invalide.", ["⬅️ Retour"])
-        s["tmp"]["pid"] = int(pid_txt)
-        s["state"] = "PRODUCT_STOCK_VALUE"
-        return build_response("Nouveau stock (nombre) ?", None)
-
-    if s["state"] == "PRODUCT_STOCK_VALUE":
-        qty_txt = re.sub(r"[^0-9]", "", normalize(text))
-        if not qty_txt:
-            return build_response("Valeur invalide.", ["⬅️ Retour"])
-        qty = int(qty_txt)
-        try:
-            pid = s["tmp"]["pid"]
-            MerchantAPI.update_stock(token, pid, qty)
-            s["state"] = "PRODUCTS_MENU"
-            return build_response(f"📦 Stock de [{pid}] mis à jour: {qty}", ["Lister", "Ajouter", "Modifier", "Supprimer", "Stock", "⬅️ Retour"])
-        except Exception:
-            return build_response("❌ Échec mise à jour stock.", ["⬅️ Retour"])
-
-    # Fallback
-    return build_response("Je n'ai pas compris. Reprenez depuis le menu :", MENU)
+    # Aide
+    return build_response(
+        "ℹ️ Commandes: *Commandes*, *Commande <id>*, *Accepter/Préparer/Expédier/Livrée/Annuler*\n"
+        "ℹ️ Produits: *Créer produit*, *Mes produits*, *Détail <id>*, *Edit <id>*\n"
+        "ℹ️ Boutique: *Basculer* (Ouvert/Fermé)\n"
+        "👉 Tapez *menu* pour revenir.",
+        ["Mes produits","Commandes","Menu"]
+    )
