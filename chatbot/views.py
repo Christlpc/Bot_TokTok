@@ -1,7 +1,7 @@
 import json, logging
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from utils import (
+from .utils import (
     send_whatsapp_message,
     send_whatsapp_buttons,
     send_whatsapp_location_request,

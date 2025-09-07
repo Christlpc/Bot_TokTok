@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional, List
-from auth_core import get_session, build_response, normalize
+from .auth_core import get_session, build_response, normalize
 
 logger = logging.getLogger(__name__)
 

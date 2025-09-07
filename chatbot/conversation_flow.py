@@ -2,8 +2,8 @@ from __future__ import annotations
 import re, os, requests, logging
 from typing import Dict, Any, Optional, List
 from urllib.parse import quote_plus
-from openai import OpenAI   # ✅ Agent IA
-from auth_core import get_session, build_response, normalize
+from .openai import OpenAI   # ✅ Agent IA
+from .auth_core import get_session, build_response, normalize
 
 
 logger = logging.getLogger(__name__)

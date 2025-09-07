@@ -2,12 +2,13 @@
 from __future__ import annotations
 import logging, time
 from typing import Dict, Any, Optional
-from auth_core import get_session, ensure_auth_or_ask_password
+from .auth_core import get_session, ensure_auth_or_ask_password
 
 # Tes flows
-import conversation_flow   # client
-import livreur_Flow        # livreur
-import merchant_flow       # marchand
+#import .conversation_flow
+from .import livreur_Flow        # livreur
+from .import merchant_flow       # marchand
+from .import conversation_flow   # client
 
 logger = logging.getLogger(__name__)
 
