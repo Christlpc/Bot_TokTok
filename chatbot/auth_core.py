@@ -271,7 +271,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             }
             rr = requests.post(f"{API_BASE}/api/v1/auth/livreurs/", json=payload, timeout=TIMEOUT)
 
-        elif role == "marchand":
+        elif role == "entreprise":
             # 🧩 Champs demandés : type_entreprise, description, adresse, coordonnees_gps, numero_rccm, horaires_ouverture
             payload = {
                 "user": {
