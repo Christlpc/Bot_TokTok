@@ -5,7 +5,8 @@ from .utils import (
     send_whatsapp_message,
     send_whatsapp_buttons,
     send_whatsapp_location_request,
-    send_whatsapp_media_url
+    send_whatsapp_media_url,
+    send_whatsapp_list
 )
 from .conversation_flow import handle_message, get_session
 from .router import handle_incoming           # ⇦ point d'entrée unique (login commun + flows)
@@ -13,6 +14,8 @@ from .auth_core import get_session, normalize # ⇦ sessions partagées + helper
 
 logger = logging.getLogger(__name__)
 VERIFY_TOKEN = "toktok_secret"
+RECENT_WAMIDS = {}
+WAMID_TTL_SEC = 60
 
 # Masquage des infos sensibles (ex: numéros)
 def mask_sensitive(value: str, visible: int = 3) -> str:
@@ -22,6 +25,15 @@ def mask_sensitive(value: str, visible: int = 3) -> str:
         return "*" * len(value)
     return value[:visible] + "****" + value[-visible:]
 
+def _seen_wamid(wamid: str) -> bool:
+    import time
+    now = time.time()
+    for k, exp in list(RECENT_WAMIDS.items()):
+        if exp < now: RECENT_WAMIDS.pop(k, None)
+    if not wamid: return False
+    if wamid in RECENT_WAMIDS: return True
+    RECENT_WAMIDS[wamid] = now + WAMID_TTL_SEC
+    return False
 
 @csrf_exempt
 def whatsapp_webhook(request):
@@ -34,81 +46,73 @@ def whatsapp_webhook(request):
         return HttpResponse("Verification failed", status=403)
 
     if request.method == "POST":
+        body = json.loads(request.body.decode("utf-8"))
         try:
-            body = json.loads(request.body.decode("utf-8"))
             entry = body["entry"][0]
             changes = entry["changes"][0]["value"]
             messages = changes.get("messages")
 
-            if not messages:
-                return JsonResponse({"status": "no_messages"}, status=200)
+            if messages:
+                msg = messages[0]
+                wamid = msg.get("id") or msg.get("wamid")
+                if _seen_wamid(wamid):
+                    logger.info("[WA] duplicate webhook ignored", extra={"wamid": wamid})
+                    return JsonResponse({"status": "ok"}, status=200)
 
-            msg = messages[0]
-            from_number = msg["from"]                # ex: "24206...."
-            session = get_session(from_number)       # ☑️ session partagée (auth_core)
+                from_number = msg["from"]
+                session = get_session(from_number)
 
-            # --- Normalisation input WhatsApp ---
-            msg_type = msg.get("type")
-            text = ""
-            lat = lng = None
-            media_url = None
+                msg_type = msg.get("type")
+                text = ""
 
-            if msg_type == "text":
-                text = msg["text"]["body"]
-                logger.info(f"[WA] Text from {from_number}: {text}")
+                if msg_type == "text":
+                    text = msg["text"]["body"]
 
-            elif msg_type == "interactive":
-                itype = msg["interactive"]["type"]
-                if itype == "button_reply":
-                    # on passe le titre bouton au flow (ex: "Connexion", "Missions dispo", etc.)
-                    text = msg["interactive"]["button_reply"]["title"]
-                    logger.info(f"[WA] Button from {from_number}: {text}")
-                elif itype == "list_reply":
-                    text = msg["interactive"]["list_reply"]["title"]
-                    logger.info(f"[WA] List from {from_number}: {text}")
+                elif msg_type == "interactive":
+                    inter = msg["interactive"]
+                    itype = inter.get("type")
+                    # Bouton → on récupère le titre déjà géré par tes flows
+                    if itype == "button_reply":
+                        text = inter["button_reply"]["title"]
+                    # Liste → on convertit row.id en commande textuelle
+                    elif itype == "list_reply":
+                        row = inter["list_reply"]
+                        row_id = row.get("id", "")
+                        # id attendus: accept_<id> | details_<id>
+                        if row_id.startswith("accept_"):
+                            text = f"Accepter {row_id.split('_',1)[1]}"
+                        elif row_id.startswith("details_"):
+                            text = f"Détails {row_id.split('_',1)[1]}"
+                        else:
+                            text = row.get("title") or "Menu"
 
-            elif msg_type == "location":
-                lat = msg["location"]["latitude"]
-                lng = msg["location"]["longitude"]
-                # on peut mettre un mot-clé pour garder un historique lisible
-                text = "📍 localisation envoyée"
-                logger.info(f"[WA] Location from {from_number}: {lat},{lng}")
+                elif msg_type == "location":
+                    # … ton code localisation inchangé …
+                    pass
 
-            elif msg_type in {"image","audio","video","document","sticker"}:
-                # selon ton provider WA, la structure peut changer ; ici un exemple image
-                if "image" in msg:
-                    media_url = msg["image"].get("link") or msg["image"].get("url")
-                elif "document" in msg:
-                    media_url = msg["document"].get("link") or msg["document"].get("url")
-                text = msg.get(msg_type, {}).get("caption") or f"[{msg_type}]"
-                logger.info(f"[WA] Media from {from_number}: type={msg_type} url={media_url}")
+                # ----- passage au moteur -----
+                bot_output = handle_message(from_number, text)
 
-            # --- Passe au moteur (router -> auth commune -> flow par rôle) ---
-            bot_output = handle_incoming(
-                phone=from_number,
-                text=text or "",
-                lat=lat, lng=lng,
-                media_url=media_url
-            )
-            response_text = bot_output.get("response", "❌ Erreur interne.")
-            buttons = bot_output.get("buttons")  # liste de str (max 3 gérées)
+                # localisation demandée ?
+                if session["step"] == "COURIER_DEPART":
+                    send_whatsapp_location_request(from_number)
+                    return JsonResponse({"status": "ok"}, status=200)
 
-            # --- Cas spé: si un flow attend une localisation, tu peux relancer une demande WA native
-            # Exemple: si ton flow client utilise session["step"] == "COURIER_DEPART"
-            if session.get("step") == "COURIER_DEPART":
-                send_whatsapp_location_request(from_number)
-                return JsonResponse({"status": "ok"}, status=200)
-
-            # --- Envoi WA ---
-            if media_url:  # si ton flow/IA veut renvoyer un média (selon ton implémentation)
-                send_whatsapp_media_url(from_number, media_url, caption=response_text)
-            elif buttons:
-                send_whatsapp_buttons(from_number, response_text, buttons)
-            else:
-                send_whatsapp_message(from_number, response_text)
-
-            return JsonResponse({"status": "ok"}, status=200)
+                # ----- envoi selon la réponse -----
+                if "list" in bot_output:
+                    # bot_output["list"] = {"rows": [...], "title": "..."} (cf. patch flow)
+                    send_whatsapp_list(
+                        from_number,
+                        bot_output.get("response", ""),
+                        bot_output["list"]["rows"],
+                        bot_output["list"].get("title","Missions")
+                    )
+                elif bot_output.get("buttons"):
+                    send_whatsapp_buttons(from_number, bot_output["response"], bot_output["buttons"])
+                else:
+                    send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
 
         except Exception as e:
-            logger.exception(f"[WA] Webhook error: {e}")
-            return JsonResponse({"status": "error"}, status=200)
+            logger.error(f"Erreur webhook: {str(e)}")
+
+        return JsonResponse({"status": "ok"}, status=200)

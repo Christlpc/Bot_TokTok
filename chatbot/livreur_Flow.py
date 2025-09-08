@@ -43,20 +43,38 @@ def list_missions_disponibles(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "GET", "/api/v1/coursier/missions/disponibles/")
     if r.status_code != 200:
         return build_response("❌ Erreur lors du chargement des missions disponibles.", MAIN_MENU_BTNS)
+
     arr = r.json() or []
     session.setdefault("ctx", {})["last_list"] = [d.get("id") for d in arr]
     if not arr:
         return build_response("😕 Aucune mission disponible pour l’instant.", MAIN_MENU_BTNS)
+
+    # message pro
     lines = []
-    for d in arr[:3]:
+    for d in arr[:10]:
         mid = d.get("id")
         dep = d.get("adresse_recuperation", "—")
         dest = d.get("adresse_livraison", "—")
-        cod = d.get("cod_montant") or d.get("montant_cod") or "0"
+        cod = d.get("cod_montant") or d.get("montant_cod") or 0
         lines.append(f"#{mid} • {dep} → {dest} • COD {cod} XAF")
-    txt = "🆕 *Missions disponibles*\n" + "\n".join(lines) + "\n\n" \
-          "👉 Réponds: *Accepter <id>* ou *Détails <id>*"
-    return build_response(txt, ["Accepter 123","Détails 123","Menu"])
+
+    msg = "🆕 *Missions disponibles*\n" + "\n".join(lines[:5])  # aperçu
+    # construit la liste
+    rows = []
+    for d in arr[:10]:
+        mid = d.get("id")
+        dep = d.get("adresse_recuperation", "—")
+        dest = d.get("adresse_livraison", "—")
+        title = f"Accepter #{mid}"[:24]
+        desc  = f"{dep} → {dest}"[:72]
+        rows.append({"id": f"accept_{mid}", "title": title, "description": desc})
+        # seconde ligne: détails
+        rows.append({"id": f"details_{mid}", "title": f"Détails #{mid}"[:24], "description": desc})
+
+    return {
+        "response": msg,
+        "list": {"title": "Choisir une action", "rows": rows}
+    }
 
 def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "GET", "/api/v1/coursier/missions/mes_missions/")
@@ -145,25 +163,27 @@ def _update_statut(session: Dict[str, Any], livraison_id: str, statut: str) -> D
         return build_response("❌ Échec de mise à jour du statut.", ACTIONS_BTNS)
     return build_response(f"✅ Statut mis à jour: *{statut}*.", ACTIONS_BTNS)
 
-def set_statut_simple(session: Dict[str, Any], statut: str) -> Dict[str, Any]:
+def _ensure_livraison_id(session: Dict[str, Any]) -> Optional[str]:
     liv_id = (session.get("ctx") or {}).get("current_livraison_id")
-    if not liv_id:
-        mid = (session.get("ctx") or {}).get("current_mission_id")
-        if not mid:
-            return build_response("❌ Aucune mission sélectionnée. Envoie *Détails <id>* d’abord.",
-                                  ["Mes missions","Missions dispo","Menu"])
-        m = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
-        if m.status_code == 200:
-            md = m.json()
-            liv_id = (md.get("livraison") or {}).get("id") or md.get("livraison_id")
-            if liv_id:
-                session["ctx"]["current_livraison_id"] = liv_id
+    if liv_id: return str(liv_id)
+    mid = (session.get("ctx") or {}).get("current_mission_id")
+    if not mid: return None
+    det = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
+    if det.status_code == 200:
+        dj = det.json()
+        liv_id = (dj.get("livraison") or {}).get("id") or dj.get("livraison_id")
+        if liv_id:
+            session["ctx"]["current_livraison_id"] = liv_id
+            return str(liv_id)
+    return None
 
+def set_statut_simple(session: Dict[str, Any], statut: str) -> Dict[str, Any]:
+    liv_id = _ensure_livraison_id(session)
     if not liv_id:
-        return build_response("❌ Livraison liée introuvable pour cette mission.", ACTIONS_BTNS)
+        return build_response("❌ Livraison liée introuvable pour cette mission.", ["Mes missions","Missions dispo","Menu"])
     if statut not in STATUTS_VALIDES:
         return build_response("❌ Statut invalide.", ACTIONS_BTNS)
-    return _update_statut(session, str(liv_id), statut)
+    return _update_statut(session, liv_id, statut)
 
 def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
     return set_statut_simple(session, "en_route_recuperation")
