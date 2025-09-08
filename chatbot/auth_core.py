@@ -292,7 +292,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
                 "numero_rccm": data.get("numero_rccm",""),
                 "horaires_ouverture": data.get("horaires_ouverture",""),
             }
-            rr = requests.post(f"{API_BASE}/api/v1/auth/marchands/", json=payload, timeout=TIMEOUT)
+            rr = requests.post(f"{API_BASE}/api/v1/auth/entreprises/", json=payload, timeout=TIMEOUT)
 
         else:
             return build_response("❌ Rôle inconnu. Reprenez *Inscription*.", SIGNUP_ROLE_BTNS)
