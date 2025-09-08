@@ -17,7 +17,7 @@ WELCOME_TEXT = (
     "Choisissez *Connexion* ou *Inscription*."
 )
 WELCOME_BTNS = ["Connexion", "Inscription", "Aide"]
-SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Marchand"]
+SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Entreprise"]  # ← affichage
 
 # ---------- Helpers ----------
 def get_session(phone: str) -> Dict[str, Any]:
@@ -108,16 +108,16 @@ def detect_role_via_profiles(session: Dict[str, Any]) -> Optional[str]:
         if r.status_code == 200: return "livreur"
     except Exception: pass
     try:
-        r = requests.get(f"{API_BASE}/api/v1/auth/entreprises/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
+        r = requests.get(f"{API_BASE}/api/v1/auth/entreprises/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)  # ← entreprises
         if r.status_code == 200: return "entreprise"
     except Exception: pass
     return None
 
 def fetch_role_profile(session: Dict[str, Any], role: str) -> Dict[str, Any]:
     url_map = {
-        "client":   "/api/v1/auth/clients/my_profile/",
-        "livreur":  "/api/v1/auth/livreurs/my_profile/",
-        "entreprise": "/api/v1/auth/entreprises/my_profile/",
+        "client":     "/api/v1/auth/clients/my_profile/",
+        "livreur":    "/api/v1/auth/livreurs/my_profile/",
+        "entreprise": "/api/v1/auth/entreprises/my_profile/",  # ← entreprises
     }
     path = url_map.get(role)
     if not path: return {}
@@ -125,16 +125,20 @@ def fetch_role_profile(session: Dict[str, Any], role: str) -> Dict[str, Any]:
     return r.json() if r.status_code == 200 else {}
 
 def route_to_role_menu(session: Dict[str, Any], role: str, intro_text: str) -> Dict[str, Any]:
+    # remplace le bloc rôle livreur
     if role == "livreur":
         return build_response(
-            intro_text + "\n- *Missions dispo*\n- *Mes missions*\n- *Basculer En ligne/Hors ligne*",
-            ["Missions dispo","Mes missions","Basculer En ligne/Hors ligne"]
+            intro_text + "\n- *Missions dispo*\n- *Mes missions*\n- *Basculer statut*",
+            ["Missions dispo", "Mes missions", "Basculer statut"]  # ≤ 20
         )
+
+    # remplace le bloc rôle entreprise (ex-marchand) si besoin
     if role == "entreprise":
         return build_response(
             intro_text + "\n- *Créer produit*\n- *Mes produits*\n- *Commandes*",
-            ["Créer produit","Mes produits","Commandes"]
+            ["Créer produit", "Mes produits", "Commandes"]  # déjà OK
         )
+
     return build_response(
         intro_text + "\n- *Nouvelle demande*\n- *Suivre ma livraison*\n- *Marketplace*",
         ["Nouvelle demande","Suivre ma livraison","Marketplace"]
@@ -158,8 +162,14 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
     session["auth"]["access"] = access
     session["auth"]["refresh"] = refresh
 
-    role = data.get("user_type") or data.get("role") or (data.get("user") or {}).get("role") \
-           or detect_role_via_profiles(session) or "client"
+    # ← priorité: backend, sinon profils
+    role = (
+        data.get("user_type") or data.get("role") or (data.get("user") or {}).get("role")
+        or detect_role_via_profiles(session) or "client"
+    )
+    # Harmonise le nom si backend renvoie "marchand"
+    if role == "marchand":
+        role = "entreprise"
     session["user"]["role"] = role
 
     display_name = (data.get("user", {}).get("first_name","") + " " + data.get("user", {}).get("last_name","")).strip()
@@ -208,17 +218,22 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
 
     # Choix rôle
     if session["step"] == "SIGNUP_ROLE":
-        m = {"client":"client","livreur":"livreur","entreprise":"entreprise"}
+        m = {"client": "client", "livreur": "livreur", "entreprise": "entreprise"}  # ← mapping rôle UI
+        # autoriser aussi "marchand" si l'utilisateur l'écrit
+        if tl == "marchand": tl = "entreprise"
         role = m.get(tl)
         if not role:
-            return build_response("Choisissez *Client*, *Livreur* ou *Marchand*.", SIGNUP_ROLE_BTNS)
+            return build_response("Choisissez *Client*, *Livreur* ou *Entreprise*.", SIGNUP_ROLE_BTNS)
         session["signup"]["role"] = role
         if role == "client":
-            session["step"] = "SIGNUP_CLIENT_NAME"; return build_response("👤 *Client* — Votre *nom complet* ?")
+            session["step"] = "SIGNUP_CLIENT_NAME";
+            return build_response("👤 *Client* — Votre *nom complet* ?")
         if role == "livreur":
-            session["step"] = "SIGNUP_LIVREUR_NAME"; return build_response("🚴 *Livreur* — Votre *nom complet* ?")
+            session["step"] = "SIGNUP_LIVREUR_NAME";
+            return build_response("🚴 *Livreur* — Votre *nom complet* ?")
         if role == "entreprise":
-            session["step"] = "SIGNUP_MARCHAND_ENTREPRISE"; return build_response("🏪 *Marchand* — Nom de votre *entreprise* ?")
+            session["step"] = "SIGNUP_MARCHAND_ENTREPRISE";
+            return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?")
 
     # ----- Client (simple) -----
     if session["step"] == "SIGNUP_CLIENT_NAME":

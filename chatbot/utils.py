@@ -59,7 +59,6 @@ def send_whatsapp_buttons(to, body_text, buttons):
     print("Réponse API boutons:", res.text)
     return res.json()
 
-
 def send_whatsapp_location_request(to):
     """Demande officielle de localisation (WhatsApp Cloud API)"""
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
@@ -159,3 +158,26 @@ def send_whatsapp_media_id(to: str, media_id: str, kind: str = "image", caption:
     res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
     print("Réponse API media_id:", res.text)
     return res.json()
+
+def send_whatsapp_list(to, body_text, rows):
+    """
+    rows = [{"id":"act_missions","title":"Missions dispo","description":""}, ...]  # title ≤ 24, desc ≤ 72
+    """
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": body_text[:1000]},
+            "action": {
+                "button": "Choisir",  # ≤ 20
+                "sections": [{
+                    "title": "Menu",
+                    "rows": rows[:10]
+                }]
+            }
+        }
+    }
+    return requests.post(WHATSAPP_URL, headers=headers, json=payload).json()

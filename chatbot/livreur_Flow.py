@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 
-MAIN_MENU_BTNS = ["Missions dispo", "Mes missions", "Basculer En ligne/Hors ligne"]
+MAIN_MENU_BTNS = ["Missions dispo", "Mes missions", "Basculer statut"]  # ≤ 20
 ACTIONS_BTNS   = ["Démarrer", "Arrivé pickup", "Arrivé livraison"]
 GREETINGS = {"bonjour","salut","bjr","hello","bonsoir","hi","menu","accueil"}
 
