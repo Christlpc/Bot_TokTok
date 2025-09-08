@@ -1,9 +1,9 @@
-# auth_core.py
+# chatbot/auth_core.py
 from __future__ import annotations
-import os, logging, requests
+import os, logging, requests, unicodedata
 from typing import Dict, Any, Optional, List
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("toktok.auth")
 
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
@@ -49,27 +49,75 @@ def _auth_headers(session: Dict[str, Any]) -> Dict[str, str]:
         h["Authorization"] = f"Bearer {tok}"
     return h
 
+def _strip_accents(text: str) -> str:
+    if not text:
+        return text
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return unicodedata.normalize("NFC", text)
+
+# ---------- Normalisations des choix (évite les 400) ----------
+_ALLOWED_TYPE_LIVREUR = {"independant", "societe", "autoentrepreneur"}
+def _norm_type_livreur(raw: str) -> Optional[str]:
+    t = _strip_accents((raw or "").strip().lower())
+    # alias courants
+    alias = {
+        "independant": "independant",
+        "indépendant": "independant",
+        "indep": "independant",
+        "solo": "independant",
+        "societe": "societe",
+        "société": "societe",
+        "company": "societe",
+        "autoentrepreneur": "autoentrepreneur",
+        "auto-entrepreneur": "autoentrepreneur",
+        "auto entrepreneur": "autoentrepreneur",
+    }
+    t = alias.get(t, t)
+    return t if t in _ALLOWED_TYPE_LIVREUR else None
+
+_ALLOWED_TYPE_VEHICULE = {"moto", "voiture", "velo", "camionnette"}
+def _norm_type_vehicule(raw: str) -> Optional[str]:
+    t = _strip_accents((raw or "").strip().lower())
+    alias = {
+        "moto": "moto",
+        "scooter": "moto",
+        "2 roues": "moto",
+        "deux roues": "moto",
+        "voiture": "voiture",
+        "auto": "voiture",
+        "car": "voiture",
+        "velo": "velo",
+        "vélo": "velo",
+        "bicycle": "velo",
+        "camionnette": "camionnette",
+        "pickup": "camionnette",
+        "fourgon": "camionnette",
+    }
+    t = alias.get(t, t)
+    return t if t in _ALLOWED_TYPE_VEHICULE else None
+
 # ---------- Détection de rôle & profils ----------
 def detect_role_via_profiles(session: Dict[str, Any]) -> Optional[str]:
     try:
         r = requests.get(f"{API_BASE}/api/v1/auth/clients/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
         if r.status_code == 200: return "client"
-    except: pass
+    except Exception: pass
     try:
         r = requests.get(f"{API_BASE}/api/v1/auth/livreurs/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
         if r.status_code == 200: return "livreur"
-    except: pass
+    except Exception: pass
     try:
-        r = requests.get(f"{API_BASE}/api/v1/auth/marchands/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
-        if r.status_code == 200: return "marchand"
-    except: pass
+        r = requests.get(f"{API_BASE}/api/v1/auth/entreprises/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
+        if r.status_code == 200: return "entreprise"
+    except Exception: pass
     return None
 
 def fetch_role_profile(session: Dict[str, Any], role: str) -> Dict[str, Any]:
     url_map = {
         "client":   "/api/v1/auth/clients/my_profile/",
         "livreur":  "/api/v1/auth/livreurs/my_profile/",
-        "marchand": "/api/v1/auth/marchands/my_profile/",
+        "entreprise": "/api/v1/auth/entreprises/my_profile/",
     }
     path = url_map.get(role)
     if not path: return {}
@@ -82,7 +130,7 @@ def route_to_role_menu(session: Dict[str, Any], role: str, intro_text: str) -> D
             intro_text + "\n- *Missions dispo*\n- *Mes missions*\n- *Basculer En ligne/Hors ligne*",
             ["Missions dispo","Mes missions","Basculer En ligne/Hors ligne"]
         )
-    if role == "marchand":
+    if role == "entreprise":
         return build_response(
             intro_text + "\n- *Créer produit*\n- *Mes produits*\n- *Commandes*",
             ["Créer produit","Mes produits","Commandes"]
@@ -97,12 +145,14 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
     r = requests.post(f"{API_BASE}/api/v1/auth/login/",
                       json={"username": username, "password": password}, timeout=TIMEOUT)
     if r.status_code != 200:
+        logger.info("login_failed", extra={"event":"login_failed","phone":username,"status_code":r.status_code})
         return build_response("❌ Identifiants incorrects.", ["Connexion","Aide"])
 
     data = r.json() or {}
     access = data.get("access") or data.get("token")
     refresh = data.get("refresh")
     if not access:
+        logger.warning("login_no_token", extra={"event":"login_no_token","phone":username})
         return build_response("❌ Erreur technique : token manquant.")
 
     session["auth"]["access"] = access
@@ -120,13 +170,31 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
             display_name = (f"{first} {last}").strip() or (prof.get("user") or {}).get("username") or username
         elif role == "livreur":
             display_name = prof.get("nom_complet") or prof.get("nom") or username
-        elif role == "marchand":
+        elif role == "entreprise":
             display_name = prof.get("nom_entreprise") or prof.get("responsable","") or username
 
     session["user"]["display_name"] = display_name or username
     session["step"] = "AUTHENTICATED"
-    logger.info(f"[LOGIN] {username} connecté en tant que {role}")
+    logger.info("login_ok", extra={"event":"login_ok","phone":username,"role":role})
     return {"ok": True, "role": role, "display_name": session["user"]["display_name"]}
+
+# ---------- Parsing erreurs API ----------
+def _parse_api_errors(resp_json: dict) -> str:
+    if not isinstance(resp_json, dict):
+        return "Données invalides."
+    details = resp_json.get("details") or resp_json.get("errors") or {}
+    msg = resp_json.get("message") or ""
+    if isinstance(details, dict) and details:
+        items = []
+        for field, msgs in details.items():
+            if isinstance(msgs, list):
+                item = "; ".join(str(m) for m in msgs)
+            else:
+                item = str(msgs)
+            items.append(f"- {field}: {item}")
+        suffix = "\n".join(items)
+        return (msg + "\n" + suffix).strip() if msg else ("Validation:\n" + suffix)
+    return msg or "Données invalides."
 
 # ---------- Wizard d'inscription (Client / Livreur / Marchand) ----------
 def signup_start(session: Dict[str, Any]):
@@ -136,11 +204,11 @@ def signup_start(session: Dict[str, Any]):
 
 def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     session = get_session(phone)
-    t = normalize(text); tl = t.lower()
+    t = normalize(text); tl = _strip_accents(t.lower())
 
     # Choix rôle
     if session["step"] == "SIGNUP_ROLE":
-        m = {"client":"client","livreur":"livreur","marchand":"marchand"}
+        m = {"client":"client","livreur":"livreur","entreprise":"entreprise"}
         role = m.get(tl)
         if not role:
             return build_response("Choisissez *Client*, *Livreur* ou *Marchand*.", SIGNUP_ROLE_BTNS)
@@ -148,9 +216,8 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         if role == "client":
             session["step"] = "SIGNUP_CLIENT_NAME"; return build_response("👤 *Client* — Votre *nom complet* ?")
         if role == "livreur":
-            # champs: nom complet + infos véhicule/zone/permis
             session["step"] = "SIGNUP_LIVREUR_NAME"; return build_response("🚴 *Livreur* — Votre *nom complet* ?")
-        if role == "marchand":
+        if role == "entreprise":
             session["step"] = "SIGNUP_MARCHAND_ENTREPRISE"; return build_response("🏪 *Marchand* — Nom de votre *entreprise* ?")
 
     # ----- Client (simple) -----
@@ -168,24 +235,29 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         session["signup"]["password"] = t
         return signup_submit(session, phone)
 
-    # ----- Livreur (avec les champs demandés) -----
-    # user first/last/email → puis type_livreur / type_vehicule / numero_permis / zone_activite
+    # ----- Livreur (tous champs requis) -----
     if session["step"] == "SIGNUP_LIVREUR_NAME":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_LIVREUR_EMAIL"; return build_response("📧 *Livreur* — Votre *email* ?")
     if session["step"] == "SIGNUP_LIVREUR_EMAIL":
         session["signup"]["data"]["email"] = t
-        session["step"] = "SIGNUP_LIVREUR_TYPE"; return build_response("🏷️ *Type livreur* ? (ex: independant)")
+        session["step"] = "SIGNUP_LIVREUR_TYPE"; return build_response("🏷️ *Type livreur* ? (*independant*, *societe*, *autoentrepreneur*)")
     if session["step"] == "SIGNUP_LIVREUR_TYPE":
-        session["signup"]["data"]["type_livreur"] = t
-        session["step"] = "SIGNUP_LIVREUR_VEHICULE"; return build_response("🛵 *Type de véhicule* ? (ex: moto)")
+        norm = _norm_type_livreur(t)
+        if not norm:
+            return build_response("Type invalide. Choisissez: *independant*, *societe*, *autoentrepreneur*.")
+        session["signup"]["data"]["type_livreur"] = norm
+        session["step"] = "SIGNUP_LIVREUR_VEHICULE"; return build_response("🛵 *Type de véhicule* ? (*moto*, *voiture*, *velo*, *camionnette*)")
     if session["step"] == "SIGNUP_LIVREUR_VEHICULE":
-        session["signup"]["data"]["type_vehicule"] = t
+        norm = _norm_type_vehicule(t)
+        if not norm:
+            return build_response("Type véhicule invalide. Exemples: *moto*, *voiture*, *velo*, *camionnette*.")
+        session["signup"]["data"]["type_vehicule"] = norm
         session["step"] = "SIGNUP_LIVREUR_PERMIS"; return build_response("🧾 *Numéro de permis* ?")
     if session["step"] == "SIGNUP_LIVREUR_PERMIS":
         session["signup"]["data"]["numero_permis"] = t
-        session["step"] = "SIGNUP_LIVREUR_ZONE"; return build_response("🗺️ *Zone d’activité* ?")
+        session["step"] = "SIGNUP_LIVREUR_ZONE"; return build_response("🗺️ *Zone d’activité* ? (ex: Brazzaville)")
     if session["step"] == "SIGNUP_LIVREUR_ZONE":
         session["signup"]["data"]["zone_activite"] = t
         session["step"] = "SIGNUP_LIVREUR_PASSWORD"; return build_response("🔑 *Livreur* — Choisissez un *mot de passe*.")
@@ -193,12 +265,12 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         session["signup"]["password"] = t
         return signup_submit(session, phone)
 
-    # ----- Marchand (avec les champs demandés) -----
+    # ----- Marchand (tous champs requis) -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
         session["step"] = "SIGNUP_MARCHAND_TYPE"; return build_response("🏷️ *Type d’entreprise* ? (ex: restaurant)")
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
-        session["signup"]["data"]["type_entreprise"] = t
+        session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower())
         session["step"] = "SIGNUP_MARCHAND_DESC"; return build_response("📝 *Description* ?")
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
@@ -252,7 +324,6 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             rr = requests.post(f"{API_BASE}/api/v1/auth/clients/", json=payload, timeout=TIMEOUT)
 
         elif role == "livreur":
-            # 🧩 Champs demandés : type_livreur, type_vehicule, numero_permis, zone_activite
             payload = {
                 "user": {
                     "username": phone_e164,
@@ -272,7 +343,6 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             rr = requests.post(f"{API_BASE}/api/v1/auth/livreurs/", json=payload, timeout=TIMEOUT)
 
         elif role == "entreprise":
-            # 🧩 Champs demandés : type_entreprise, description, adresse, coordonnees_gps, numero_rccm, horaires_ouverture
             payload = {
                 "user": {
                     "username": phone_e164,
@@ -280,7 +350,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
                     "first_name": data.get("first_name",""),
                     "last_name": data.get("last_name",""),
                     "phone_number": phone_e164,
-                    "user_type": "marchand",
+                    "user_type": "entreprise",
                     "password": pwd,
                     "password_confirm": pwd,
                 },
@@ -298,8 +368,16 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             return build_response("❌ Rôle inconnu. Reprenez *Inscription*.", SIGNUP_ROLE_BTNS)
 
         if rr.status_code not in (200, 201):
-            logger.warning(f"[SIGNUP] API status={rr.status_code} body={rr.text[:300]}")
-            return build_response("❌ Inscription refusée. Vérifiez vos informations et réessayez.")
+            try:
+                j = rr.json()
+            except Exception:
+                j = {"message": rr.text[:200]}
+            msg = _parse_api_errors(j)
+            logger.warning("signup_failed", extra={
+                "event":"signup_failed","status_code": rr.status_code,
+                "role": role, "phone": phone, "api_message": j.get("message"), "api_details": j.get("details")
+            })
+            return build_response("❌ Inscription refusée.\n" + msg)
 
         # ✅ login auto
         resp = login_common(session, username=phone_e164, password=pwd)
@@ -309,7 +387,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
         return route_to_role_menu(session, role_after, f"🎉 Compte créé pour {dn} — rôle *{role_after}*.\n")
 
     except Exception as e:
-        logger.exception(f"[SIGNUP] Exception: {e}")
+        logger.exception("signup_exception", extra={"event":"signup_exception","role":role,"phone":phone,"err":str(e)})
         return build_response("❌ Erreur réseau pendant l’inscription. Réessayez plus tard.")
 
 # ---------- Orchestrateur d’auth ----------
@@ -317,9 +395,11 @@ def ensure_auth_or_ask_password(phone: str, text: str):
     session = get_session(phone)
     t = normalize(text).lower()
 
+    # Wizard inscription en cours ?
     if session["step"].startswith("SIGNUP_"):
         return handle_signup_step(phone, text)
 
+    # Déjà connecté ?
     if session["auth"]["access"]:
         return None
 
