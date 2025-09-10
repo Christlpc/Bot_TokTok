@@ -149,10 +149,55 @@ def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]
         return build_response(txt, ["Mes missions", "Menu"])
 # ---------- Mise à jour statuts ----------
 def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
-    resp = set_statut_simple(session, "en_route_recuperation")
-    if "response" in resp:
-        resp["response"] += "\n🚴 En route vers le point de récupération."
-    return resp
+    """
+    Au démarrage :
+    - Si la mission est liée à une commande (coursier normal) → on envoie commande_id
+    - Si la mission vient du marketplace → on envoie mission_id
+    """
+    mid = (session.get("ctx") or {}).get("current_mission_id")
+    if not mid:
+        return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
+
+    # Charger la mission
+    m = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
+    if m.status_code != 200:
+        return build_response("❌ Impossible de charger les détails de la mission.", ["Mes missions", "Menu"])
+    mj = m.json()
+
+    # Préparer le payload en fonction de la source
+    payload = {
+        "adresse_recuperation": mj.get("adresse_recuperation", ""),
+        "coordonnees_recuperation": mj.get("coordonnees_recuperation", ""),
+        "adresse_livraison": mj.get("adresse_livraison", ""),
+        "coordonnees_livraison": mj.get("coordonnees_livraison", ""),
+        "distance_km": mj.get("distance_km", "0"),
+        "duree_estimee_minutes": mj.get("duree_estimee_minutes", 0),
+        "livreur": mj.get("livreur") or (session.get("user") or {}).get("id", 0),
+    }
+
+    # Cas 1 : mission liée à une commande (coursier normal)
+    if mj.get("commande_id"):
+        payload["commande_id"] = mj["commande_id"]
+
+    # Cas 2 : mission marketplace → on envoie mission_id
+    else:
+        payload["mission_id"] = int(mid)
+
+    # Appel API pour créer la livraison
+    r = api_request(session, "POST", "/api/v1/livraisons/livraisons/", json=payload)
+    if r.status_code not in (200, 201):
+        return build_response("❌ Échec de création de la livraison. Réessaie plus tard.", ["Mes missions", "Menu"])
+
+    livraison = r.json()
+    liv_id = livraison.get("id")
+    if liv_id:
+        session.setdefault("ctx", {})["current_livraison_id"] = liv_id
+
+    return build_response(
+        f"✅ Livraison #{liv_id} créée et liée à la mission #{mid}.\n"
+        "🚴 Tu es maintenant en route vers le point de récupération.",
+        ["Arrivé pickup", "Mes missions", "Menu"]
+    )
 
 def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
     resp = set_statut_simple(session, "arrive_recuperation")
