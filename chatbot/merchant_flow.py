@@ -1,4 +1,4 @@
-# marchand_flow.py
+# entreprise_flow.py (ex-marchand_flow.py)
 from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional, List
@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 TIMEOUT  = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 
-MAIN_BTNS   = ["Créer produit", "Mes produits", "Commandes"]
-ORDER_BTNS  = ["Accepter", "Préparer", "Expédier"]
-PRODUCT_BTNS = ["Publier", "Mettre à jour", "Supprimer"]  # (Supprimer pas implémenté ici par défaut)
+MAIN_BTNS     = ["Créer produit", "Mes produits", "Commandes"]         # ≤20 chars OK
+ORDER_BTNS    = ["Accepter", "Préparer", "Expédier"]
+PRODUCT_BTNS  = ["Publier", "Mettre à jour", "Supprimer"]  # (Supprimer non-implémenté ici)
 
 STATUTS_CMD = {"nouvelle","acceptee","preparee","expediee","livree","annulee"}
 
@@ -26,25 +26,26 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs) -> re
         headers["Authorization"] = f"Bearer {tok}"
     return requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
 
-def _ensure_merchant_id(session: Dict[str, Any]) -> Optional[int]:
-    me = api_request(session, "GET", "/api/v1/auth/marchands/my_profile/")
+def _ensure_entreprise_id(session: Dict[str, Any]) -> Optional[int]:
+    """Récupère l’ID entreprise connecté (ex-marchand)."""
+    me = api_request(session, "GET", "/api/v1/auth/entreprises/my_profile/")
     if me.status_code != 200:
         return None
     mid = me.json().get("id")
-    session["user"]["id"] = mid
+    session.setdefault("user", {})["id"] = mid
     return mid
 
 # -----------------------------
 # Actions Boutique
 # -----------------------------
 def toggle_boutique(session: Dict[str, Any]) -> Dict[str, Any]:
-    mid = session.get("user", {}).get("id") or _ensure_merchant_id(session)
-    if not mid:
-        return build_response("❌ Profil marchand introuvable. Reconnectez-vous.")
-    r = api_request(session, "POST", f"/api/v1/auth/marchands/{mid}/toggle_actif/", json={})
+    eid = session.get("user", {}).get("id") or _ensure_entreprise_id(session)
+    if not eid:
+        return build_response("❌ Profil entreprise introuvable. Reconnectez-vous.", MAIN_BTNS)
+    r = api_request(session, "POST", f"/api/v1/auth/entreprises/{eid}/toggle_actif/", json={})
     if r.status_code not in (200, 202):
         return build_response("❌ Impossible de basculer l’état de la boutique.", MAIN_BTNS)
-    me = api_request(session, "GET", "/api/v1/auth/marchands/my_profile/")
+    me = api_request(session, "GET", "/api/v1/auth/entreprises/my_profile/")
     actif = False
     if me.status_code == 200:
         actif = bool(me.json().get("actif", False))
@@ -61,7 +62,10 @@ def list_my_products(session: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(arr, dict) and "results" in arr:
         arr = arr["results"]
     if not arr:
-        return build_response("📦 Aucun produit publié.\n👉 Tapez *Créer produit* pour ajouter un article.", ["Créer produit","Commandes","Menu"])
+        return build_response(
+            "📦 Aucun produit publié.\n👉 Tapez *Créer produit* pour ajouter un article.",
+            ["Créer produit","Commandes","Menu"]
+        )
     lines = []
     for p in arr[:5]:
         pid = p.get("id")
@@ -70,7 +74,10 @@ def list_my_products(session: Dict[str, Any]) -> Dict[str, Any]:
         stock = p.get("stock", "-")
         actif = "✅" if p.get("actif", True) else "⛔"
         lines.append(f"#{pid} • {nom} • {prix} XAF • stock {stock} {actif}")
-    return build_response("🗂️ *Mes produits*\n" + "\n".join(lines) + "\n\n👉 *Détail <id>* ou *Edit <id>*", ["Créer produit","Commandes","Menu"])
+    return build_response(
+        "🗂️ *Mes produits*\n" + "\n".join(lines) + "\n\n👉 *Détail <id>* ou *Edit <id>*",
+        ["Créer produit","Commandes","Menu"]
+    )
 
 def product_detail(session: Dict[str, Any], pid: str) -> Dict[str, Any]:
     r = api_request(session, "GET", f"/api/v1/marketplace/produits/{pid}/")
@@ -98,7 +105,7 @@ def product_patch(session: Dict[str, Any], pid: str, fields: Dict[str, Any]) -> 
 # Wizard création produit
 def create_start(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "PROD_NAME"
-    session["ctx"]["new_product"] = {
+    session.setdefault("ctx", {})["new_product"] = {
         "nom": None,
         "prix": None,
         "categorie": None,
@@ -169,7 +176,7 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
             session["step"] = "PROD_NAME"
             return build_response("✏️ Reprenons : quel est le *nom* ?")
         if tt in {"annuler","cancel"}:
-            session["step"] = "MARCHAND_MENU"
+            session["step"] = "ENTREPRISE_MENU"
             session["ctx"].pop("new_product", None)
             return build_response("❌ Création annulée.", MAIN_BTNS)
         return build_response("👉 Répondez par *Publier*, *Modifier* ou *Annuler*.", ["Publier","Modifier","Annuler"])
@@ -193,7 +200,7 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
     if r.status_code not in (200, 201):
         return build_response("❌ Échec de création du produit. Réessayez.")
     p = r.json()
-    session["step"] = "MARCHAND_MENU"
+    session["step"] = "ENTREPRISE_MENU"
     session["ctx"].pop("new_product", None)
     return build_response(f"✅ Produit #{p.get('id')} *{p.get('nom')}* créé.", ["Mes produits","Commandes","Menu"])
 
@@ -250,11 +257,11 @@ def order_update_status(session: Dict[str, Any], cid: str, statut: str) -> Dict[
     statut = statut.lower()
     if statut == "accepter":
         statut = "acceptee"
-    if statut == "préparer" or statut == "preparer":
+    if statut in {"préparer", "preparer"}:
         statut = "preparee"
-    if statut == "expédier" or statut == "expedier":
+    if statut in {"expédier", "expedier"}:
         statut = "expediee"
-    if statut == "livrée" or statut == "livree":
+    if statut in {"livrée", "livree"}:
         statut = "livree"
     if statut == "annuler":
         statut = "annulee"
@@ -270,17 +277,17 @@ def order_update_status(session: Dict[str, Any], cid: str, statut: str) -> Dict[
 # Router texte
 # -----------------------------
 def handle_message(phone: str, text: str,
-                   *,
-                   lat: Optional[float] = None,
+                   *, lat: Optional[float] = None,
                    lng: Optional[float] = None,
-                   media_url: Optional[str] = None) -> Dict[str, Any]:
+                   media_url: Optional[str] = None,
+                   **_) -> Dict[str, Any]:
     t = normalize(text).lower()
     session = get_session(phone)
 
     # Salutations/Menu
     if t in {"menu","bonjour","salut","hello","hi","accueil"}:
-        session["step"] = "MARCHAND_MENU"
-        return build_response("🏪 *Menu marchand* — choisissez :", MAIN_BTNS)
+        session["step"] = "ENTREPRISE_MENU"
+        return build_response("🏪 *Espace entreprise* — choisissez :", MAIN_BTNS)
 
     # Toggle boutique (ouvert/fermé)
     if t in {"basculer","toggle","ouvrir","fermer","basculer ouvert","basculer ferme"} or t.startswith("basculer"):
@@ -288,7 +295,7 @@ def handle_message(phone: str, text: str,
 
     # Produits
     if t in {"mes produits","produits","catalogue"}:
-        session["step"] = "MARCHAND_MENU"
+        session["step"] = "ENTREPRISE_MENU"
         return list_my_products(session)
 
     if t in {"créer produit","creer produit","nouveau produit","ajouter produit"}:
@@ -304,7 +311,7 @@ def handle_message(phone: str, text: str,
         pid = re.sub(r"[^0-9]", "", t.split(" ",1)[1])
         if not pid:
             return build_response("❌ Id manquant. Ex: *Edit 123*")
-        session["ctx"]["current_product_id"] = int(pid)
+        session.setdefault("ctx", {})["current_product_id"] = int(pid)
         session["step"] = "PROD_EDIT_FIELD"
         return build_response("✏️ Quel champ modifier ? (*prix*, *stock*, *nom*, *description*, *categorie*)")
 
@@ -317,15 +324,15 @@ def handle_message(phone: str, text: str,
         allowed = {"prix","stock","nom","description","categorie"}
         if field not in allowed:
             return build_response("👉 Choisissez parmi *prix*, *stock*, *nom*, *description*, *categorie*.")
-        session["ctx"]["edit_field"] = field
+        session.setdefault("ctx", {})["edit_field"] = field
         session["step"] = "PROD_EDIT_VALUE"
         return build_response(f"Entrez la *nouvelle valeur* pour {field} :")
 
     if session.get("step") == "PROD_EDIT_VALUE":
-        pid = session["ctx"].get("current_product_id")
-        field = session["ctx"].get("edit_field")
+        pid = (session.get("ctx") or {}).get("current_product_id")
+        field = (session.get("ctx") or {}).get("edit_field")
         if not pid or not field:
-            session["step"] = "MARCHAND_MENU"
+            session["step"] = "ENTREPRISE_MENU"
             return build_response("❌ Contexte perdu. Reprenez avec *Mes produits*.")
         value: Any = text
         if field in {"prix","stock"}:
@@ -334,7 +341,7 @@ def handle_message(phone: str, text: str,
                 return build_response("⚠️ Entrez un nombre valide.")
             value = int(num)
         fields = { "prix": "prix", "stock": "stock", "nom": "nom", "description": "description", "categorie": "categorie" }
-        session["step"] = "MARCHAND_MENU"
+        session["step"] = "ENTREPRISE_MENU"
         return product_patch(session, str(pid), {fields[field]: value})
 
     # Commandes

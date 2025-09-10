@@ -17,7 +17,7 @@ WELCOME_TEXT = (
     "Choisissez *Connexion* ou *Inscription*."
 )
 WELCOME_BTNS = ["Connexion", "Inscription", "Aide"]
-SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Entreprise"]  # ← affichage
+SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Entreprise"]
 
 # ---------- Helpers ----------
 def get_session(phone: str) -> Dict[str, Any]:
@@ -43,7 +43,7 @@ def normalize(s: str) -> str:
     return " ".join((s or "").split()).strip()
 
 def _auth_headers(session: Dict[str, Any]) -> Dict[str, str]:
-    h = {}
+    h: Dict[str, str] = {}
     tok = session.get("auth", {}).get("access")
     if tok:
         h["Authorization"] = f"Bearer {tok}"
@@ -60,7 +60,6 @@ def _strip_accents(text: str) -> str:
 _ALLOWED_TYPE_LIVREUR = {"independant", "societe", "autoentrepreneur"}
 def _norm_type_livreur(raw: str) -> Optional[str]:
     t = _strip_accents((raw or "").strip().lower())
-    # alias courants
     alias = {
         "independant": "independant",
         "indépendant": "independant",
@@ -102,90 +101,94 @@ def detect_role_via_profiles(session: Dict[str, Any]) -> Optional[str]:
     try:
         r = requests.get(f"{API_BASE}/api/v1/auth/clients/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
         if r.status_code == 200: return "client"
-    except Exception: pass
+    except Exception:
+        pass
     try:
         r = requests.get(f"{API_BASE}/api/v1/auth/livreurs/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
         if r.status_code == 200: return "livreur"
-    except Exception: pass
+    except Exception:
+        pass
     try:
-        r = requests.get(f"{API_BASE}/api/v1/auth/entreprises/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)  # ← entreprises
+        r = requests.get(f"{API_BASE}/api/v1/auth/entreprises/my_profile/", headers=_auth_headers(session), timeout=TIMEOUT)
         if r.status_code == 200: return "entreprise"
-    except Exception: pass
+    except Exception:
+        pass
     return None
 
 def fetch_role_profile(session: Dict[str, Any], role: str) -> Dict[str, Any]:
     url_map = {
         "client":     "/api/v1/auth/clients/my_profile/",
         "livreur":    "/api/v1/auth/livreurs/my_profile/",
-        "entreprise": "/api/v1/auth/entreprises/my_profile/",  # ← entreprises
+        "entreprise": "/api/v1/auth/entreprises/my_profile/",
     }
     path = url_map.get(role)
-    if not path: return {}
+    if not path:
+        return {}
     r = requests.get(f"{API_BASE}{path}", headers=_auth_headers(session), timeout=TIMEOUT)
     return r.json() if r.status_code == 200 else {}
 
 def route_to_role_menu(session: Dict[str, Any], role: str, intro_text: str) -> Dict[str, Any]:
-    # remplace le bloc rôle livreur
     if role == "livreur":
         return build_response(
             intro_text + "\n- *Missions dispo*\n- *Mes missions*\n- *Basculer statut*",
-            ["Missions dispo", "Mes missions", "Basculer statut"]  # ≤ 20
+            ["Missions dispo", "Mes missions", "Basculer statut"]
         )
-
-    # remplace le bloc rôle entreprise (ex-marchand) si besoin
     if role == "entreprise":
         return build_response(
             intro_text + "\n- *Créer produit*\n- *Mes produits*\n- *Commandes*",
-            ["Créer produit", "Mes produits", "Commandes"]  # déjà OK
+            ["Créer produit", "Mes produits", "Commandes"]
         )
-
+    # client par défaut
     return build_response(
         intro_text + "\n- *Nouvelle demande*\n- *Suivre ma livraison*\n- *Marketplace*",
-        ["Nouvelle demande","Suivre ma livraison","Marketplace"]
+        ["Nouvelle demande", "Suivre ma livraison", "Marketplace"]
     )
 
 # ---------- Login commun ----------
 def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[str, Any]:
-    r = requests.post(f"{API_BASE}/api/v1/auth/login/",
-                      json={"username": username, "password": password}, timeout=TIMEOUT)
+    r = requests.post(
+        f"{API_BASE}/api/v1/auth/login/",
+        json={"username": username, "password": password},
+        timeout=TIMEOUT
+    )
     if r.status_code != 200:
-        logger.info("login_failed", extra={"event":"login_failed","phone":username,"status_code":r.status_code})
-        return build_response("❌ Identifiants incorrects.", ["Connexion","Aide"])
+        logger.info("login_failed", extra={"event": "login_failed", "phone": username, "status_code": r.status_code})
+        return build_response("❌ Identifiants incorrects.", ["Connexion", "Aide"])
 
     data = r.json() or {}
     access = data.get("access") or data.get("token")
     refresh = data.get("refresh")
     if not access:
-        logger.warning("login_no_token", extra={"event":"login_no_token","phone":username})
+        logger.warning("login_no_token", extra={"event": "login_no_token", "phone": username})
         return build_response("❌ Erreur technique : token manquant.")
 
     session["auth"]["access"] = access
     session["auth"]["refresh"] = refresh
 
-    # ← priorité: backend, sinon profils
+    # priorité: backend -> profils -> client
     role = (
         data.get("user_type") or data.get("role") or (data.get("user") or {}).get("role")
         or detect_role_via_profiles(session) or "client"
     )
-    # Harmonise le nom si backend renvoie "marchand"
     if role == "marchand":
         role = "entreprise"
     session["user"]["role"] = role
 
-    display_name = (data.get("user", {}).get("first_name","") + " " + data.get("user", {}).get("last_name","")).strip()
+    display_name = (data.get("user", {}).get("first_name", "") + " " + data.get("user", {}).get("last_name", "")).strip()
     if not display_name:
         prof = fetch_role_profile(session, role)
         if role == "client":
-            first = (prof.get("user") or {}).get("first_name",""); last = (prof.get("user") or {}).get("last_name","")
+            first = (prof.get("user") or {}).get("first_name", "")
+            last = (prof.get("user") or {}).get("last_name", "")
             display_name = (f"{first} {last}").strip() or (prof.get("user") or {}).get("username") or username
         elif role == "livreur":
             display_name = prof.get("nom_complet") or prof.get("nom") or username
         elif role == "entreprise":
-            display_name = prof.get("nom_entreprise") or prof.get("responsable","") or username
+            display_name = prof.get("nom_entreprise") or prof.get("responsable", "") or username
 
     session["user"]["display_name"] = display_name or username
     session["step"] = "AUTHENTICATED"
-    logger.info("login_ok", extra={"event":"login_ok","phone":username,"role":role})
+    logger.info("login_ok", extra={"event": "login_ok", "phone": username, "role": role})
     return {"ok": True, "role": role, "display_name": session["user"]["display_name"]}
 
 # ---------- Parsing erreurs API ----------
@@ -206,7 +209,7 @@ def _parse_api_errors(resp_json: dict) -> str:
         return (msg + "\n" + suffix).strip() if msg else ("Validation:\n" + suffix)
     return msg or "Données invalides."
 
-# ---------- Wizard d'inscription (Client / Livreur / Marchand) ----------
+# ---------- Wizard d'inscription (Client / Livreur / Entreprise) ----------
 def signup_start(session: Dict[str, Any]):
     session["signup"] = {"role": None, "data": {}, "password": None}
     session["step"] = "SIGNUP_ROLE"
@@ -214,101 +217,120 @@ def signup_start(session: Dict[str, Any]):
 
 def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     session = get_session(phone)
-    t = normalize(text); tl = _strip_accents(t.lower())
+    t = normalize(text)
+    tl = _strip_accents(t.lower())
 
     # Choix rôle
-    if session["step"] == "SIGNUP_ROLE":
-        m = {"client": "client", "livreur": "livreur", "entreprise": "entreprise"}  # ← mapping rôle UI
-        # autoriser aussi "marchand" si l'utilisateur l'écrit
-        if tl == "marchand": tl = "entreprise"
+    if session.get("step", "").startswith("SIGNUP_ROLE"):
+        m = {"client": "client", "livreur": "livreur", "entreprise": "entreprise"}
+        if tl == "marchand":  # compat saisie utilisateur
+            tl = "entreprise"
         role = m.get(tl)
         if not role:
             return build_response("Choisissez *Client*, *Livreur* ou *Entreprise*.", SIGNUP_ROLE_BTNS)
         session["signup"]["role"] = role
         if role == "client":
-            session["step"] = "SIGNUP_CLIENT_NAME";
+            session["step"] = "SIGNUP_CLIENT_NAME"
             return build_response("👤 *Client* — Votre *nom complet* ?")
         if role == "livreur":
-            session["step"] = "SIGNUP_LIVREUR_NAME";
+            session["step"] = "SIGNUP_LIVREUR_NAME"
             return build_response("🚴 *Livreur* — Votre *nom complet* ?")
         if role == "entreprise":
-            session["step"] = "SIGNUP_MARCHAND_ENTREPRISE";
+            session["step"] = "SIGNUP_MARCHAND_ENTREPRISE"
             return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?")
 
-    # ----- Client (simple) -----
+    # ----- Client -----
     if session["step"] == "SIGNUP_CLIENT_NAME":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
-        session["step"] = "SIGNUP_CLIENT_EMAIL"; return build_response("📧 *Client* — Votre *email* ?")
+        session["step"] = "SIGNUP_CLIENT_EMAIL"
+        return build_response("📧 *Client* — Votre *email* ?")
     if session["step"] == "SIGNUP_CLIENT_EMAIL":
         session["signup"]["data"]["email"] = t
-        session["step"] = "SIGNUP_CLIENT_ADDRESS"; return build_response("📍 *Client* — Votre *adresse principale* ?")
+        session["step"] = "SIGNUP_CLIENT_ADDRESS"
+        return build_response("📍 *Client* — Votre *adresse principale* ?")
     if session["step"] == "SIGNUP_CLIENT_ADDRESS":
         session["signup"]["data"]["adresse"] = t
-        session["step"] = "SIGNUP_CLIENT_PASSWORD"; return build_response("🔑 *Client* — Choisissez un *mot de passe*.")
+        session["step"] = "SIGNUP_CLIENT_PASSWORD"
+        return build_response("🔑 *Client* — Choisissez un *mot de passe*.")
     if session["step"] == "SIGNUP_CLIENT_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
 
-    # ----- Livreur (tous champs requis) -----
+    # ----- Livreur -----
     if session["step"] == "SIGNUP_LIVREUR_NAME":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
-        session["step"] = "SIGNUP_LIVREUR_EMAIL"; return build_response("📧 *Livreur* — Votre *email* ?")
+        session["step"] = "SIGNUP_LIVREUR_EMAIL"
+        return build_response("📧 *Livreur* — Votre *email* ?")
     if session["step"] == "SIGNUP_LIVREUR_EMAIL":
         session["signup"]["data"]["email"] = t
-        session["step"] = "SIGNUP_LIVREUR_TYPE"; return build_response("🏷️ *Type livreur* ? (*independant*, *societe*, *autoentrepreneur*)")
+        session["step"] = "SIGNUP_LIVREUR_TYPE"
+        return build_response("🏷️ *Type livreur* ? (*independant*, *societe*, *autoentrepreneur*)")
     if session["step"] == "SIGNUP_LIVREUR_TYPE":
         norm = _norm_type_livreur(t)
         if not norm:
             return build_response("Type invalide. Choisissez: *independant*, *societe*, *autoentrepreneur*.")
         session["signup"]["data"]["type_livreur"] = norm
-        session["step"] = "SIGNUP_LIVREUR_VEHICULE"; return build_response("🛵 *Type de véhicule* ? (*moto*, *voiture*, *velo*, *camionnette*)")
+        session["step"] = "SIGNUP_LIVREUR_VEHICULE"
+        return build_response("🛵 *Type de véhicule* ? (*moto*, *voiture*, *velo*, *camionnette*)")
     if session["step"] == "SIGNUP_LIVREUR_VEHICULE":
         norm = _norm_type_vehicule(t)
         if not norm:
             return build_response("Type véhicule invalide. Exemples: *moto*, *voiture*, *velo*, *camionnette*.")
         session["signup"]["data"]["type_vehicule"] = norm
-        session["step"] = "SIGNUP_LIVREUR_PERMIS"; return build_response("🧾 *Numéro de permis* ?")
+        session["step"] = "SIGNUP_LIVREUR_PERMIS"
+        return build_response("🧾 *Numéro de permis* ?")
     if session["step"] == "SIGNUP_LIVREUR_PERMIS":
         session["signup"]["data"]["numero_permis"] = t
-        session["step"] = "SIGNUP_LIVREUR_ZONE"; return build_response("🗺️ *Zone d’activité* ? (ex: Brazzaville)")
+        session["step"] = "SIGNUP_LIVREUR_ZONE"
+        return build_response("🗺️ *Zone d’activité* ? (ex: Brazzaville)")
     if session["step"] == "SIGNUP_LIVREUR_ZONE":
         session["signup"]["data"]["zone_activite"] = t
-        session["step"] = "SIGNUP_LIVREUR_PASSWORD"; return build_response("🔑 *Livreur* — Choisissez un *mot de passe*.")
+        session["step"] = "SIGNUP_LIVREUR_PASSWORD"
+        return build_response("🔑 *Livreur* — Choisissez un *mot de passe*.")
     if session["step"] == "SIGNUP_LIVREUR_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
 
-    # ----- Marchand (tous champs requis) -----
+    # ----- Entreprise (ex Marchand) -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
-        session["step"] = "SIGNUP_MARCHAND_TYPE"; return build_response("🏷️ *Type d’entreprise* ? (ex: restaurant)")
+        session["step"] = "SIGNUP_MARCHAND_TYPE"
+        return build_response("🏷️ *Type d’entreprise* ? (ex: restaurant)")
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
         session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower())
-        session["step"] = "SIGNUP_MARCHAND_DESC"; return build_response("📝 *Description* ?")
+        session["step"] = "SIGNUP_MARCHAND_DESC"
+        return build_response("📝 *Description* ?")
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
-        session["step"] = "SIGNUP_MARCHAND_ADR"; return build_response("📍 *Adresse* de l’entreprise ?")
+        session["step"] = "SIGNUP_MARCHAND_ADR"
+        return build_response("📍 *Adresse* de l’entreprise ?")
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
-        session["step"] = "SIGNUP_MARCHAND_GPS"; return build_response("📌 *Coordonnées GPS* (lat,lng) ?")
+        session["step"] = "SIGNUP_MARCHAND_GPS"
+        return build_response("📌 *Coordonnées GPS* (lat,lng) ?")
     if session["step"] == "SIGNUP_MARCHAND_GPS":
         session["signup"]["data"]["coordonnees_gps"] = t
-        session["step"] = "SIGNUP_MARCHAND_RCCM"; return build_response("📄 *Numéro RCCM* ?")
+        session["step"] = "SIGNUP_MARCHAND_RCCM"
+        return build_response("📄 *Numéro RCCM* ?")
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
-        session["step"] = "SIGNUP_MARCHAND_HOR"; return build_response("⏰ *Horaires d’ouverture* ?")
+        session["step"] = "SIGNUP_MARCHAND_HOR"
+        return build_response("⏰ *Horaires d’ouverture* ?")
     if session["step"] == "SIGNUP_MARCHAND_HOR":
         session["signup"]["data"]["horaires_ouverture"] = t
-        session["step"] = "SIGNUP_MARCHAND_CONTACT"; return build_response("👤 *Prénom Nom* du responsable ?")
+        session["step"] = "SIGNUP_MARCHAND_CONTACT"
+        return build_response("👤 *Prénom Nom* du responsable ?")
     if session["step"] == "SIGNUP_MARCHAND_CONTACT":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
-        session["step"] = "SIGNUP_MARCHAND_EMAIL"; return build_response("📧 *Email* du responsable ?")
+        session["step"] = "SIGNUP_MARCHAND_EMAIL"
+        return build_response("📧 *Email* du responsable ?")
     if session["step"] == "SIGNUP_MARCHAND_EMAIL":
         session["signup"]["data"]["email"] = t
-        session["step"] = "SIGNUP_MARCHAND_PASSWORD"; return build_response("🔑 *Marchand* — Choisissez un *mot de passe*.")
+        session["step"] = "SIGNUP_MARCHAND_PASSWORD"
+        return build_response("🔑 *Entreprise* — Choisissez un *mot de passe*.")  # <- corrigé
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
@@ -316,7 +338,9 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     return build_response("ℹ️ Reprenez : *Inscription* puis choisissez un rôle.", SIGNUP_ROLE_BTNS)
 
 def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
-    role = session["signup"]["role"]; data = session["signup"]["data"]; pwd = session["signup"]["password"]
+    role = session["signup"]["role"]
+    data = session["signup"]["data"]
+    pwd = session["signup"]["password"]
     phone_e164 = phone
 
     try:
@@ -324,15 +348,15 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             payload = {
                 "user": {
                     "username": phone_e164,
-                    "email": data.get("email",""),
-                    "first_name": data.get("first_name",""),
-                    "last_name": data.get("last_name",""),
+                    "email": data.get("email", ""),
+                    "first_name": data.get("first_name", ""),
+                    "last_name": data.get("last_name", ""),
                     "phone_number": phone_e164,
                     "user_type": "client",
                     "password": pwd,
                     "password_confirm": pwd,
                 },
-                "adresse_principale": data.get("adresse",""),
+                "adresse_principale": data.get("adresse", ""),
                 "coordonnees_gps": "",
                 "preferences_livraison": "Standard",
             }
@@ -342,18 +366,18 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             payload = {
                 "user": {
                     "username": phone_e164,
-                    "email": data.get("email",""),
-                    "first_name": data.get("first_name",""),
-                    "last_name": data.get("last_name",""),
+                    "email": data.get("email", ""),
+                    "first_name": data.get("first_name", ""),
+                    "last_name": data.get("last_name", ""),
                     "phone_number": phone_e164,
                     "user_type": "livreur",
                     "password": pwd,
                     "password_confirm": pwd,
                 },
-                "type_livreur": data.get("type_livreur","independant"),
-                "type_vehicule": data.get("type_vehicule","moto"),
-                "numero_permis": data.get("numero_permis",""),
-                "zone_activite": data.get("zone_activite",""),
+                "type_livreur": data.get("type_livreur", "independant"),
+                "type_vehicule": data.get("type_vehicule", "moto"),
+                "numero_permis": data.get("numero_permis", ""),
+                "zone_activite": data.get("zone_activite", ""),
             }
             rr = requests.post(f"{API_BASE}/api/v1/auth/livreurs/", json=payload, timeout=TIMEOUT)
 
@@ -361,21 +385,21 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             payload = {
                 "user": {
                     "username": phone_e164,
-                    "email": data.get("email",""),
-                    "first_name": data.get("first_name",""),
-                    "last_name": data.get("last_name",""),
+                    "email": data.get("email", ""),
+                    "first_name": data.get("first_name", ""),
+                    "last_name": data.get("last_name", ""),
                     "phone_number": phone_e164,
                     "user_type": "entreprise",
                     "password": pwd,
                     "password_confirm": pwd,
                 },
-                "nom_entreprise": data.get("nom_entreprise",""),
-                "type_entreprise": data.get("type_entreprise",""),
-                "description": data.get("description",""),
-                "adresse": data.get("adresse",""),
-                "coordonnees_gps": data.get("coordonnees_gps",""),
-                "numero_rccm": data.get("numero_rccm",""),
-                "horaires_ouverture": data.get("horaires_ouverture",""),
+                "nom_entreprise": data.get("nom_entreprise", ""),
+                "type_entreprise": data.get("type_entreprise", ""),
+                "description": data.get("description", ""),
+                "adresse": data.get("adresse", ""),
+                "coordonnees_gps": data.get("coordonnees_gps", ""),
+                "numero_rccm": data.get("numero_rccm", ""),
+                "horaires_ouverture": data.get("horaires_ouverture", ""),
             }
             rr = requests.post(f"{API_BASE}/api/v1/auth/entreprises/", json=payload, timeout=TIMEOUT)
 
@@ -388,21 +412,29 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             except Exception:
                 j = {"message": rr.text[:200]}
             msg = _parse_api_errors(j)
-            logger.warning("signup_failed", extra={
-                "event":"signup_failed","status_code": rr.status_code,
-                "role": role, "phone": phone, "api_message": j.get("message"), "api_details": j.get("details")
-            })
+            logger.warning(
+                "signup_failed",
+                extra={
+                    "event": "signup_failed",
+                    "status_code": rr.status_code,
+                    "role": role,
+                    "phone": phone,
+                    "api_message": j.get("message"),
+                    "api_details": j.get("details"),
+                },
+            )
             return build_response("❌ Inscription refusée.\n" + msg)
 
         # ✅ login auto
         resp = login_common(session, username=phone_e164, password=pwd)
         if not (isinstance(resp, dict) and resp.get("ok")):
             return build_response("✅ Inscription réussie. ❗ Mais la connexion a échoué, envoyez *Connexion* et votre mot de passe.")
-        role_after = resp["role"]; dn = resp.get("display_name") or phone_e164
+        role_after = resp["role"]
+        dn = resp.get("display_name") or phone_e164
         return route_to_role_menu(session, role_after, f"🎉 Compte créé pour {dn} — rôle *{role_after}*.\n")
 
     except Exception as e:
-        logger.exception("signup_exception", extra={"event":"signup_exception","role":role,"phone":phone,"err":str(e)})
+        logger.exception("signup_exception", extra={"event": "signup_exception", "role": role, "phone": phone, "err": str(e)})
         return build_response("❌ Erreur réseau pendant l’inscription. Réessayez plus tard.")
 
 # ---------- Orchestrateur d’auth ----------
@@ -410,12 +442,13 @@ def ensure_auth_or_ask_password(phone: str, text: str):
     session = get_session(phone)
     t = normalize(text).lower()
 
-    # Wizard inscription en cours ?
-    if session["step"].startswith("SIGNUP_"):
+    # Wizard d’inscription en cours ?
+    current_step = session.get("step") or ""
+    if current_step.startswith("SIGNUP_"):
         return handle_signup_step(phone, text)
 
     # Déjà connecté ?
-    if session["auth"]["access"]:
+    if session.get("auth", {}).get("access"):
         return None
 
     if session["step"] == "WELCOME":
@@ -423,19 +456,20 @@ def ensure_auth_or_ask_password(phone: str, text: str):
         return build_response(WELCOME_TEXT, WELCOME_BTNS)
 
     if session["step"] == "WELCOME_CHOICE":
-        if t in {"connexion","login"}:
+        if t in {"connexion", "login"}:
             session["step"] = "LOGIN_WAIT_PASSWORD"
             return build_response("🔑 Entrez votre *mot de passe* (identifiant = votre numéro WhatsApp).")
-        if t in {"inscription","s'inscrire","sinscrire","signup"}:
+        if t in {"inscription", "s'inscrire", "sinscrire", "signup"}:
             return signup_start(session)
-        if t in {"aide","help"}:
+        if t in {"aide", "help"}:
             return build_response("ℹ️ Envoyez *Connexion* pour vous connecter, ou *Inscription* pour créer un compte.")
         return build_response("👉 Choisissez *Connexion* ou *Inscription*.", WELCOME_BTNS)
 
     if session["step"] == "LOGIN_WAIT_PASSWORD":
         resp = login_common(session, username=phone, password=text)
         if isinstance(resp, dict) and resp.get("ok"):
-            role = resp["role"]; dn = resp.get("display_name") or phone
+            role = resp["role"]
+            dn = resp.get("display_name") or phone
             return route_to_role_menu(session, role, f"👋 Bonjour {dn}. Connecté en tant que *{role}*.\n")
         return resp
 
