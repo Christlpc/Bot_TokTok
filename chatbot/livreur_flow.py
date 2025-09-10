@@ -52,29 +52,31 @@ def list_missions_disponibles(session: Dict[str, Any]) -> Dict[str, Any]:
     if not arr:
         return build_response("😕 Aucune mission disponible pour l’instant.", MAIN_MENU_BTNS)
 
-    # Aperçu texte pro (5 premières)
+    # message résumé (max 5 missions)
     lines = []
     for d in arr[:5]:
-        mid  = d.get("id")
-        dep  = d.get("adresse_recuperation", "—")
+        mid = d.get("id")
+        dep = d.get("adresse_recuperation", "—")
         dest = d.get("adresse_livraison", "—")
-        cod  = d.get("cod_montant") or d.get("montant_cod") or 0
+        cod = d.get("cod_montant") or d.get("montant_cod") or 0
         lines.append(f"#{mid} • {dep} → {dest} • COD {cod} XAF")
 
-    # Liste interactive (jusqu’à 10 missions, 2 lignes par mission: accepter / détails)
-    rows = []
-    for d in arr[:10]:
-        mid  = d.get("id")
-        dep  = d.get("adresse_recuperation", "—")
-        dest = d.get("adresse_livraison", "—")
-        desc = f"{dep} → {dest}"[:72]
-        rows.append({"id": f"accept_{mid}",  "title": f"Accepter #{mid}"[:24], "description": desc})
-        rows.append({"id": f"details_{mid}", "title": f"Détails #{mid}"[:24],  "description": desc})
+    msg = "🆕 *Missions disponibles*\n" + "\n".join(lines)
 
-    msg = "🆕 *Missions disponibles*\n" + "\n".join(lines) + "\n\nChoisis dans la liste 👇"
+    # liste interactive (max 10 rows → donc 5 missions × 2 actions)
+    rows = []
+    for d in arr[:5]:   # 👈 limiter à 5 missions
+        mid = d.get("id")
+        dep = d.get("adresse_recuperation", "—")
+        dest = d.get("adresse_livraison", "—")
+        desc  = f"{dep} → {dest}"[:72]
+
+        rows.append({"id": f"accept_{mid}", "title": f"Accepter #{mid}"[:24], "description": desc})
+        rows.append({"id": f"details_{mid}", "title": f"Détails #{mid}"[:24], "description": desc})
+
     return {
         "response": msg,
-        "list": {"title": "Choisir une action", "rows": rows}
+        "list": {"title": "Choisir une mission", "rows": rows}
     }
 
 def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
