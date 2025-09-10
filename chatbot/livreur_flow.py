@@ -49,30 +49,45 @@ def list_missions_disponibles(session: Dict[str, Any]) -> Dict[str, Any]:
 
     arr = r.json() or []
     session.setdefault("ctx", {})["last_list"] = [d.get("id") for d in arr]
+
     if not arr:
         return build_response("😕 Aucune mission disponible pour l’instant.", MAIN_MENU_BTNS)
 
-    # message résumé (max 5 missions)
+    # ⚡ On limite à 3 missions max pour UX clair
+    arr = arr[:3]
+
+    # Message résumé
     lines = []
-    for d in arr[:5]:
+    for d in arr:
         mid = d.get("id")
         dep = d.get("adresse_recuperation", "—")
         dest = d.get("adresse_livraison", "—")
         cod = d.get("cod_montant") or d.get("montant_cod") or 0
-        lines.append(f"#{mid} • {dep} → {dest} • COD {cod} XAF")
+        lines.append(f"#{mid} • {dep} → {dest}\n   COD: {cod} XAF")
 
-    msg = "🆕 *Missions disponibles*\n" + "\n".join(lines)
+    msg = "🆕 *Missions disponibles*\n-------------------------\n" + "\n\n".join(lines)
 
-    # liste interactive (max 10 rows → donc 5 missions × 2 actions)
+    # Liste interactive (6 items : accepter + détails pour chaque mission)
     rows = []
-    for d in arr[:5]:   # 👈 limiter à 5 missions
+    for d in arr:
         mid = d.get("id")
         dep = d.get("adresse_recuperation", "—")
         dest = d.get("adresse_livraison", "—")
-        desc  = f"{dep} → {dest}"[:72]
+        desc = f"{dep} → {dest}"[:72]
 
-        rows.append({"id": f"accept_{mid}", "title": f"Accepter #{mid}"[:24], "description": desc})
-        rows.append({"id": f"details_{mid}", "title": f"Détails #{mid}"[:24], "description": desc})
+        # Bouton accepter
+        rows.append({
+            "id": f"accept_{mid}",
+            "title": f"✅ Accepter #{mid}"[:24],
+            "description": desc
+        })
+
+        # Bouton détails
+        rows.append({
+            "id": f"details_{mid}",
+            "title": f"ℹ️ Détails #{mid}"[:24],
+            "description": desc
+        })
 
     return {
         "response": msg,
