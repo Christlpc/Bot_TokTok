@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="35b64399-8a4e-44f5-af4c-cd2b8d8d2985" name="Changes" comment="" />
+    <list default="true" id="35b64399-8a4e-44f5-af4c-cd2b8d8d2985" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/chatbot/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/chatbot/utils.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -119,7 +121,7 @@
       <workItem from="1757333177495" duration="9758000" />
       <workItem from="1757352579064" duration="1632000" />
       <workItem from="1757493369440" duration="654000" />
-      <workItem from="1757498683680" duration="669000" />
+      <workItem from="1757498683680" duration="1287000" />
     </task>
     <servers />
   </component>

@@ -1,5 +1,5 @@
 import os, requests
-from typing import  Optional
+from typing import Optional, List
 import mimetypes
 
 
@@ -159,9 +159,10 @@ def send_whatsapp_media_id(to: str, media_id: str, kind: str = "image", caption:
     print("Réponse API media_id:", res.text)
     return res.json()
 
-def send_whatsapp_list(to, body_text, rows):
+def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "Options"):
     """
-    rows = [{"id":"act_missions","title":"Missions dispo","description":""}, ...]  # title ≤ 24, desc ≤ 72
+    Envoi d’un menu (list message) WhatsApp Cloud API.
+    rows = [{"id": "accept_123", "title": "Accepter #123", "description": "Départ → Destination"}, ...]
     """
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -170,14 +171,16 @@ def send_whatsapp_list(to, body_text, rows):
         "type": "interactive",
         "interactive": {
             "type": "list",
-            "body": {"text": body_text[:1000]},
+            "body": {"text": body_text},
             "action": {
-                "button": "Choisir",  # ≤ 20
+                "button": "Choisir",
                 "sections": [{
-                    "title": "Menu",
-                    "rows": rows[:10]
+                    "title": title,
+                    "rows": rows
                 }]
             }
         }
     }
-    return requests.post(WHATSAPP_URL, headers=headers, json=payload).json()
+    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
+    print("Réponse API list:", res.text)
+    return res.json()

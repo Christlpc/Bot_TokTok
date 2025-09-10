@@ -175,17 +175,18 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
     session["user"]["role"] = role
 
     display_name = (data.get("user", {}).get("first_name", "") + " " + data.get("user", {}).get("last_name", "")).strip()
-    if not display_name:
-        prof = fetch_role_profile(session, role)
-        if role == "client":
-            first = (prof.get("user") or {}).get("first_name", "")
-            last = (prof.get("user") or {}).get("last_name", "")
-            display_name = (f"{first} {last}").strip() or (prof.get("user") or {}).get("username") or username
-        elif role == "livreur":
-            display_name = prof.get("nom_complet") or prof.get("nom") or username
-        elif role == "entreprise":
-            display_name = prof.get("nom_entreprise") or prof.get("responsable", "") or username
+    prof = fetch_role_profile(session, role)
+    if role == "client":
+        first = (prof.get("user") or {}).get("first_name", "")
+        last = (prof.get("user") or {}).get("last_name", "")
+        display_name = (f"{first} {last}").strip() or (prof.get("user") or {}).get("username") or username
+    elif role == "livreur":
+        display_name = prof.get("nom_complet") or prof.get("nom") or username
+    elif role == "entreprise":
+        display_name = prof.get("nom_entreprise") or prof.get("responsable", "") or username
 
+    # ✅ stocker dans la session pour réutiliser
+    session["profile"] = prof
     session["user"]["display_name"] = display_name or username
     session["step"] = "AUTHENTICATED"
     logger.info("login_ok", extra={"event": "login_ok", "phone": username, "role": role})
