@@ -9,11 +9,11 @@ logger = logging.getLogger("toktok.router")
 # Map rôle -> chemin de module (avec fallback)
 FLOW_MAP: Dict[str, str] = {
     "client":     "chatbot.conversation_flow",
-    "livreur":    "chatbot.livreur_flow",
-    "entreprise": "chatbot.entreprise_flow",
-    # alias compat
-    "marchand":   "chatbot.entreprise_flow",
+    "livreur":    "chatbot.livreur_flow",     # fichier livreur_flow.py
+    "entreprise": "chatbot.merchant_flow",    # alias "entreprise"
+    "marchand":   "chatbot.merchant_flow",    # compat
 }
+
 
 def _import_handle(module_path: str):
     """Importe le module et renvoie la fonction handle_message(module)."""
