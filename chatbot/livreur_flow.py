@@ -136,47 +136,51 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     )
     return build_response(txt, ACTIONS_BTNS)
 
+# ---------- Missions ----------
 def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
-    g = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
-    if g.status_code != 200:
-        return build_response("❌ Mission introuvable.", MAIN_MENU_BTNS)
-    m = g.json()
-
-    # ✅ Appel acceptation mission
+    """
+    Le livreur accepte une mission. On se base sur l'API /coursier/missions/{id}/accepter/
+    qui gère l'affectation automatiquement. Ensuite on récupère la mission pour identifier
+    la livraison liée (si disponible).
+    """
+    # On appelle directement l'endpoint d'acceptation (payload vide ou conforme au schéma attendu)
     r = api_request(session, "POST", f"/api/v1/coursier/missions/{mission_id}/accepter/", json={})
     if r.status_code not in (200, 201):
-        return build_response("❌ Impossible d’accepter cette mission (déjà prise ?).", MAIN_MENU_BTNS)
+        return build_response("❌ Impossible d’accepter cette mission (peut-être déjà prise).", MAIN_MENU_BTNS)
 
-    session["ctx"]["current_mission_id"] = mission_id
+    # Sauvegarde mission courante
+    session.setdefault("ctx", {})["current_mission_id"] = mission_id
 
-    # ✅ Capture livraison liée
-    try:
-        mission_data = r.json()
-        liv_id = (
-            (mission_data.get("livraison") or {}).get("id")
-            or mission_data.get("livraison_id")
-            or (m.get("livraison") or {}).get("id")
-            or m.get("livraison_id")
-        )
+    # Récupérer la mission pour voir si une livraison est liée
+    m = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
+    if m.status_code == 200:
+        mj = m.json()
+        liv_id = (mj.get("livraison") or {}).get("id") or mj.get("livraison_id")
         if liv_id:
             session["ctx"]["current_livraison_id"] = liv_id
-            logger.info(f"[MISSION] Livraison {liv_id} liée à mission {mission_id}")
-    except Exception as e:
-        logger.warning(f"[MISSION] Impossible de récupérer livraison liée: {str(e)}")
+            return build_response(
+                f"✅ Mission #{mission_id} acceptée.\n"
+                f"🚚 Livraison associée : #{liv_id}\n\n"
+                "Prochaines actions :\n"
+                "- *Démarrer*\n"
+                "- *Arrivé pickup*\n"
+                "- *Arrivé livraison*\n"
+                "- *Livrée*",
+                ["Démarrer", "Mes missions", "Menu"]
+            )
 
     return build_response(
-        f"✅ Mission #{mission_id} acceptée.\n🚀 Tu peux maintenant *Démarrer*.",
-        ["Démarrer", "Mes missions", "Menu"]
+        f"✅ Mission #{mission_id} acceptée.\n"
+        "⚠️ Aucune livraison liée détectée pour l’instant.",
+        ["Mes missions", "Menu"]
     )
 
-# ---------- Livraisons (statuts / position) ----------
-STATUTS_VALIDES = {
-    "en_attente","assignee","en_route_recuperation","arrive_recuperation",
-    "recupere","en_route_livraison","arrive_livraison","livree","probleme","annulee"
-}
 
+# ---------- Livraisons (statuts / position) ----------
 def _ensure_livraison_id(session: Dict[str, Any]) -> Optional[str]:
-    """Retrouve l'ID livraison depuis le contexte ou depuis la mission courante."""
+    """
+    Vérifie si on a déjà un livraison_id en mémoire, sinon tente de le récupérer via la mission courante.
+    """
     liv_id = (session.get("ctx") or {}).get("current_livraison_id")
     if liv_id:
         return str(liv_id)
@@ -190,8 +194,9 @@ def _ensure_livraison_id(session: Dict[str, Any]) -> Optional[str]:
         dj = det.json()
         liv_id = (dj.get("livraison") or {}).get("id") or dj.get("livraison_id")
         if liv_id:
-            session.setdefault("ctx", {})["current_livraison_id"] = liv_id
+            session["ctx"]["current_livraison_id"] = liv_id
             return str(liv_id)
+
     return None
 
 def _update_statut(session: Dict[str, Any], livraison_id: str, statut: str) -> Dict[str, Any]:
