@@ -137,43 +137,37 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     return build_response(txt, ACTIONS_BTNS)
 
 def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
-    # Récupérer la mission pour un payload cohérent (si l’API en a besoin)
     g = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
     if g.status_code != 200:
         return build_response("❌ Mission introuvable.", MAIN_MENU_BTNS)
     m = g.json()
 
-    payload = {
-        "numero_mission": m.get("numero_mission") or str(mission_id),
-        "entreprise_demandeur": m.get("entreprise_demandeur") or "TokTok",
-        "contact_entreprise": m.get("contact_entreprise") or session.get("phone"),
-        "adresse_recuperation": m.get("adresse_recuperation") or "",
-        "coordonnees_recuperation": m.get("coordonnees_recuperation") or "",
-        "adresse_livraison": m.get("adresse_livraison") or "",
-        "coordonnees_livraison": m.get("coordonnees_livraison") or "",
-        "nom_client_final": m.get("nom_client_final") or "Client",
-        "telephone_client_final": m.get("telephone_client_final") or session.get("phone"),
-        "description_produit": m.get("description_produit") or "-",
-        "type_paiement": m.get("type_paiement") or "entreprise_paie",
-    }
-
-    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mission_id}/accepter/", json=payload)
+    # ✅ Appel acceptation mission
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mission_id}/accepter/", json={})
     if r.status_code not in (200, 201):
         return build_response("❌ Impossible d’accepter cette mission (déjà prise ?).", MAIN_MENU_BTNS)
 
-    # Contexte mission
-    session.setdefault("ctx", {})["current_mission_id"] = mission_id
+    session["ctx"]["current_mission_id"] = mission_id
 
-    # Si l’API renvoie la livraison liée après acceptation, capture-la
+    # ✅ Capture livraison liée
     try:
-        acc = r.json() or {}
-        liv_id = (acc.get("livraison") or {}).get("id") or acc.get("livraison_id")
+        mission_data = r.json()
+        liv_id = (
+            (mission_data.get("livraison") or {}).get("id")
+            or mission_data.get("livraison_id")
+            or (m.get("livraison") or {}).get("id")
+            or m.get("livraison_id")
+        )
         if liv_id:
             session["ctx"]["current_livraison_id"] = liv_id
-    except Exception:
-        pass
+            logger.info(f"[MISSION] Livraison {liv_id} liée à mission {mission_id}")
+    except Exception as e:
+        logger.warning(f"[MISSION] Impossible de récupérer livraison liée: {str(e)}")
 
-    return build_response(f"✅ Mission #{mission_id} acceptée.\nTu peux *Démarrer* 🚀", ["Démarrer", "Mes missions", "Menu"])
+    return build_response(
+        f"✅ Mission #{mission_id} acceptée.\n🚀 Tu peux maintenant *Démarrer*.",
+        ["Démarrer", "Mes missions", "Menu"]
+    )
 
 # ---------- Livraisons (statuts / position) ----------
 STATUTS_VALIDES = {
