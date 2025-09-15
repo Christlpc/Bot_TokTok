@@ -182,7 +182,47 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
     mid = (session.get("ctx") or {}).get("current_mission_id")
     if not mid:
         return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
-    # ⚠️ Ici tu gardes le code de création livraison (payload + POST /livraisons/)
+
+    # Charger mission pour construire le payload
+    m = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
+    if m.status_code != 200:
+        return build_response("❌ Impossible de charger la mission.", ["Mes missions", "Menu"])
+    mj = m.json()
+
+    # Charger profil livreur
+    me = api_request(session, "GET", "/api/v1/auth/livreurs/my_profile/")
+    if me.status_code != 200:
+        return build_response("❌ Profil livreur introuvable.", ["Mes missions", "Menu"])
+    livreur_id = me.json().get("id")
+
+    # Construire payload requis par l’API
+    payload = {
+        "mission_id": int(mid),
+        "commande_id": mj.get("commande_id") or 0,
+        "adresse_recuperation": mj.get("adresse_recuperation") or "",
+        "coordonnees_recuperation": mj.get("coordonnees_recuperation") or "",
+        "adresse_livraison": mj.get("adresse_livraison") or "",
+        "coordonnees_livraison": mj.get("coordonnees_livraison") or "",
+        "distance_km": str(mj.get("distance_km") or "0"),
+        "duree_estimee_minutes": mj.get("duree_estimee_minutes") or 0,
+        "livreur": livreur_id,
+    }
+
+    # Création de la livraison
+    r = api_request(session, "POST", "/api/v1/livraisons/livraisons/", json=payload)
+    if r.status_code not in (200, 201):
+        return build_response(f"❌ Échec de démarrage de la mission.\n{r.text}", ["Mes missions", "Menu"])
+
+    livraison = r.json() or {}
+    liv_id = livraison.get("id") or livraison.get("livraison_id")
+
+    if liv_id:
+        session.setdefault("ctx", {})["current_livraison_id"] = liv_id
+
+    return build_response(
+        f"✅ Livraison #{liv_id or '?'} créée et mission #{mid} démarrée.\n🚴 En route vers le pickup.",
+        ["Arrivé pickup", "Mes missions", "Menu"]
+    )
 
 
 def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
