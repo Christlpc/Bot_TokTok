@@ -186,23 +186,41 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
 
 def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
     np = session["ctx"]["new_product"]
+
+    # Vérifie l’entreprise connectée
+    eid = session.get("user", {}).get("id") or _ensure_entreprise_id(session)
+    if not eid:
+        return build_response("❌ Impossible de retrouver votre entreprise. Reconnectez-vous.", MAIN_BTNS)
+
+    # ⚠️ Ici il faut mapper la catégorie : soit via un lookup API, soit un ID fixe
+    categorie_id = np.get("categorie")
+    # Si l’API attend un ID, il faudra ajouter une étape avant (ex: choix dans liste des catégories)
+
     payload = {
         "nom": np["nom"],
         "prix": np["prix"],
-        "categorie": np["categorie"],
+        "categorie_id": categorie_id,  # 🔑 Utiliser _id au lieu de string
         "stock": np["stock"],
         "description": np["description"],
+        "entreprise_id": eid,          # 🔑 Important !
         "actif": True,
     }
     if np.get("image_url"):
         payload["image_url"] = np["image_url"]
+
     r = api_request(session, "POST", "/api/v1/marketplace/produits/", json=payload)
+
     if r.status_code not in (200, 201):
-        return build_response("❌ Échec de création du produit. Réessayez.")
+        logger.error(f"Erreur API création produit: {r.status_code} - {r.text}")
+        return build_response("❌ Échec de création du produit. Vérifiez vos champs.", ["Mes produits","Menu"])
+
     p = r.json()
     session["step"] = "ENTREPRISE_MENU"
     session["ctx"].pop("new_product", None)
-    return build_response(f"✅ Produit #{p.get('id')} *{p.get('nom')}* créé.", ["Mes produits","Commandes","Menu"])
+    return build_response(
+        f"✅ Produit #{p.get('id')} *{p.get('nom')}* créé.",
+        ["Mes produits","Commandes","Menu"]
+    )
 
 # -----------------------------
 # Commandes
