@@ -96,7 +96,6 @@ def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
         lines.append(f"#{mid} — {st} → {dest}")
     return build_response("📦 *Mes missions*\n" + "\n".join(lines), ["Détails 123", "Menu"])
 
-
 def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     r = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
     if r.status_code != 200:
@@ -117,7 +116,14 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
         f"• Paiement: {d.get('type_paiement','—')}\n"
         f"• Statut: {d.get('statut','—')}\n"
     )
-    return build_response(txt, [f"Accepter {d.get('id')}", f"Refuser {d.get('id')}", "Menu"])
+
+    # Boutons selon statut
+    if d.get("statut") == "en_attente":
+        return build_response(txt, [f"Accepter {d.get('id')}", f"Refuser {d.get('id')}", "Menu"])
+    elif d.get("statut") == "assignee":
+        return build_response(txt, ["Démarrer", "Mes missions", "Menu"])
+    else:
+        return build_response(txt, ["Mes missions", "Menu"])
 
 
 def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
@@ -148,7 +154,7 @@ def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]
         "valeur_produit": mj.get("valeur_produit"),
         "montant_coursier": mj.get("montant_coursier"),
         "type_paiement": mj.get("type_paiement"),
-        "statut": "pending",  # selon ton API
+        "statut": "pending",
         "is_haute_valeur": mj.get("is_haute_valeur", False),
         "livreur": livreur_id,
     }
@@ -160,18 +166,10 @@ def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]
 
     session.setdefault("ctx", {})["current_mission_id"] = mission_id
 
-    # Vérifier livraison associée
-    liv_id = (mj.get("livraison") or {}).get("id") or mj.get("livraison_id")
-    if liv_id:
-        session["ctx"]["current_livraison_id"] = liv_id
+    txt = f"✅ Mission #{mission_id} acceptée.\n👉 Tu peux *Démarrer* 🚀"
+    return build_response(txt, ["Démarrer", "Mes missions", "Menu"])
 
-    txt = f"✅ Mission #{mission_id} acceptée."
-    if liv_id:
-        txt += f"\n🚚 Livraison associée : #{liv_id}\n👉 Tu peux *Démarrer* 🚀"
-        return build_response(txt, ["Démarrer", "Mes missions", "Menu"])
-    else:
-        txt += "\n⚠️ Pas de livraison liée détectée."
-        return build_response(txt, ["Mes missions", "Menu"])
+
 
 
 def refuser_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
@@ -195,7 +193,6 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
         return build_response("❌ Profil livreur introuvable.", ["Mes missions", "Menu"])
     livreur_id = me.json().get("id")
 
-    # Construire payload requis par l’API
     payload = {
         "mission_id": int(mid),
         "commande_id": mj.get("commande_id") or 0,
@@ -215,7 +212,6 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
 
     livraison = r.json() or {}
     liv_id = livraison.get("id") or livraison.get("livraison_id")
-
     if liv_id:
         session.setdefault("ctx", {})["current_livraison_id"] = liv_id
 
