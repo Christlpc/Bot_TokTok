@@ -84,17 +84,30 @@ def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "GET", "/api/v1/coursier/missions/mes_missions/")
     if r.status_code != 200:
         return build_response("❌ Erreur lors du chargement de tes missions.", MAIN_MENU_BTNS)
+
     arr = r.json() or []
     if not arr:
         return build_response("📭 Aucune mission en cours.", MAIN_MENU_BTNS)
 
+    # Résumé texte
     lines = []
     for d in arr[:5]:
         mid  = d.get("id")
         st   = d.get("statut", "")
         dest = d.get("adresse_livraison", "—")
         lines.append(f"#{mid} — {st} → {dest}")
-    return build_response("📦 *Mes missions*\n" + "\n".join(lines), ["Détails 123", "Menu"])
+
+    msg = "📦 *Mes missions*\n" + "\n".join(lines)
+
+    # Liste interactive
+    rows = []
+    for d in arr[:5]:
+        mid  = d.get("id")
+        dest = d.get("adresse_livraison", "—")
+        desc = f"{d.get('statut','')} → {dest}"[:72]
+        rows.append({"id": f"details_{mid}", "title": f"📄 Détails #{mid}", "description": desc})
+
+    return {"response": msg, "list": {"title": "Choisir une mission", "rows": rows}}
 
 def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     r = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
