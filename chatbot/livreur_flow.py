@@ -130,10 +130,10 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
         f"• Statut: {d.get('statut','—')}\n"
     )
 
-    # Boutons selon statut
+    # Boutons dynamiques selon statut
     if d.get("statut") == "en_attente":
         return build_response(txt, [f"Accepter {d.get('id')}", f"Refuser {d.get('id')}", "Menu"])
-    elif d.get("statut") == "assignee":
+    elif d.get("statut") in {"assignee", "assigned"}:
         return build_response(txt, ["Démarrer", "Mes missions", "Menu"])
     else:
         return build_response(txt, ["Mes missions", "Menu"])
