@@ -148,31 +148,98 @@ def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------
 # Marketplace
 # ------------------------------------------------------
+# ------------------------------------------------------
+# Marketplace (nouveau flow basé sur catégories -> merchants -> produits)
+# ------------------------------------------------------
 def handle_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
-    session["step"] = "MARKET_SEARCH"
-    return build_response("🛍️ Quel produit recherchez-vous ?")
+    session["step"] = "MARKET_CATEGORY"
+    # Les catégories sont fixées côté bot, mais peuvent venir de l’API aussi
+    CATEGORIES = ["Restauration", "Mode", "Pharmacie"]
+    return build_response("🛍️ Choisissez une *catégorie* :", CATEGORIES)
 
-def handle_marketplace_search(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    r = api_request(session, "GET", f"/api/v1/marketplace/produits/?search={quote_plus(text)}")
+def handle_marketplace_category(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    # Normalisation
+    t = text.lower().strip()
+    mapping = {"restauration": "Restauration", "mode": "Mode", "pharmacie": "Pharmacie"}
+    if t not in mapping:
+        return build_response("⚠️ Catégorie invalide. Choisissez :", list(mapping.values()))
+
+    cat = mapping[t]
+    session["market_category"] = cat
+    session["step"] = "MARKET_MERCHANT"
+
+    # Requête API merchants de la catégorie
+    r = api_request(session, "GET", f"/api/v1/marketplace/merchants/?categorie={quote_plus(cat)}")
     try:
         data = r.json()
     except Exception:
         data = []
-    items: List[Dict[str, Any]]
-    if isinstance(data, dict):
-        items = data.get("results", []) or data.get("data", []) or []
-    else:
-        items = data or []
-    if not items:
-        return build_response("❌ Aucun produit trouvé.", ["Menu"])
-    lines = [f"• {p.get('nom','—')} — {p.get('prix','0')} FCFA" for p in items[:5]]
-    session["step"] = "MARKET_CHOICE"
-    return build_response("🛍️ Produits trouvés :\n" + "\n".join(lines) + "\n\n👉 Indiquez le *nom* du produit choisi.")
 
-def handle_marketplace_choice(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    session.setdefault("new_request", {})["market_choice"] = text
-    session["step"] = "MARKET_DESC"
-    return build_response(f"📦 Vous avez choisi *{text}*.\nSouhaitez-vous ajouter une description ?")
+    merchants = data.get("results", []) if isinstance(data, dict) else data
+    if not merchants:
+        return build_response(f"❌ Aucun marchand trouvé dans la catégorie *{cat}*.", ["Menu"])
+
+    # Limiter à 5 ou 10
+    merchants = merchants[:5]
+    session["market_merchants"] = {str(i+1): m for i, m in enumerate(merchants)}
+
+    lines = [f"{i+1}. {m.get('nom','—')}" for i, m in enumerate(merchants)]
+    return build_response(
+        f"🏬 Marchands disponibles en *{cat}* :\n" + "\n".join(lines) + "\n\n👉 Tapez le *numéro* du marchand choisi."
+    )
+
+def handle_marketplace_merchant(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    merchants = session.get("market_merchants") or {}
+    if text not in merchants:
+        return build_response("⚠️ Choisissez un numéro valide de marchand.", list(merchants.keys()))
+
+    merchant = merchants[text]
+    session["market_merchant"] = merchant
+    session["step"] = "MARKET_PRODUCTS"
+
+    # Charger les produits du marchand
+    r = api_request(session, "GET", f"/api/v1/marketplace/produits/?merchant_id={merchant.get('id')}")
+    try:
+        data = r.json()
+    except Exception:
+        data = []
+
+    produits = data.get("results", []) if isinstance(data, dict) else data
+    if not produits:
+        return build_response(f"❌ Aucun produit trouvé pour *{merchant.get('nom','—')}*.", ["Menu"])
+
+    produits = produits[:5]  # limiter
+    session["market_products"] = {str(i+1): p for i, p in enumerate(produits)}
+
+    lines = []
+    for i, p in enumerate(produits, start=1):
+        nom = p.get("nom", "—")
+        prix = p.get("prix", "0")
+        line = f"{i}. {nom} — {prix} FCFA"
+        if p.get("photo_url"):
+            line += f"\n🖼️ {p['photo_url']}"
+        lines.append(line)
+
+    return build_response(
+        f"📦 Produits de *{merchant.get('nom','—')}* :\n" + "\n".join(lines) + "\n\n👉 Tapez le *numéro* du produit choisi."
+    )
+
+def handle_marketplace_product(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    produits = session.get("market_products") or {}
+    if text not in produits:
+        return build_response("⚠️ Choisissez un numéro valide de produit.", list(produits.keys()))
+
+    produit = produits[text]
+    session["new_request"] = {
+        "market_choice": produit.get("nom"),
+        "description": produit.get("description",""),
+    }
+    session["step"] = "MARKET_PAY"
+
+    return build_response(
+        f"📦 Vous avez choisi *{produit.get('nom')}* ({produit.get('prix')} FCFA).\n💳 Choisissez un mode de paiement :",
+        ["Cash", "Mobile Money", "Virement"]
+    )
 
 def handle_marketplace_desc(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     session["new_request"]["description"] = text
@@ -343,18 +410,14 @@ def handle_message(
         return build_response("👉 Choisissez *Départ*, *Destination*, *Valeur* ou *Description*.", ["Départ","Destination","Valeur","Description"])
 
     # --- Marketplace flow ---
-    if session.get("step") == "MARKET_SEARCH":
-        return handle_marketplace_search(session, text)
-    if session.get("step") == "MARKET_CHOICE":
-        return handle_marketplace_choice(session, text)
-    if session.get("step") == "MARKET_DESC":
-        return handle_marketplace_desc(session, text)
-    if session.get("step") == "MARKET_PAY":
-        return handle_marketplace_pay(session, text)
-    if session.get("step") == "MARKET_CONFIRM":
-        return handle_marketplace_confirm(session, text)
-    if session.get("step") == "MARKET_EDIT":
-        return handle_marketplace_edit(session, text)
+    # --- Marketplace flow ---
+    if session.get("step") == "MARKET_CATEGORY":
+        return handle_marketplace_category(session, text)
+    if session.get("step") == "MARKET_MERCHANT":
+        return handle_marketplace_merchant(session, text)
+    if session.get("step") == "MARKET_PRODUCTS":
+        return handle_marketplace_product(session, text)
+
 
     # Fallback IA
     return ai_fallback(text, phone)
