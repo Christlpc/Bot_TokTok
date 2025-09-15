@@ -89,7 +89,7 @@ def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
         return build_response("📭 Aucune mission en cours.", MAIN_MENU_BTNS)
 
     # On filtre les missions livrées ou annulées
-    en_cours = [d for d in arr if d.get("statut") not in {"livree", "annulee"}]
+    en_cours = [d for d in arr if d.get("statut") not in {"delivered", "annulee"}]
 
     if not en_cours:
         return build_response("📭 Aucune mission en cours.", MAIN_MENU_BTNS)
