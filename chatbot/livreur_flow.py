@@ -259,12 +259,19 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
         ["Arrivé pickup", "Mes missions", "Menu"]
     )
 
-
 def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
-    resp = set_statut_simple(session, "arrive_recuperation")
-    if "response" in resp:
-        resp["response"] += "\n📍 Tu es arrivé au point de pickup.\n👉 Tape *Statut recupere* après avoir pris le colis."
-    return resp
+    mid = (session.get("ctx") or {}).get("current_mission_id")
+    if not mid:
+        return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
+
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_recupere/", json={})
+    if r.status_code not in (200, 201, 202):
+        return build_response(f"❌ Erreur API pickup: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
+
+    return build_response(
+        f"📍 Mission #{mid} marquée comme *pickup effectué*.\n👉 En route vers la livraison.",
+        ["Arrivé livraison", "Mes missions", "Menu"]
+    )
 
 
 def action_arrive_drop(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -274,7 +281,7 @@ def action_arrive_drop(session: Dict[str, Any]) -> Dict[str, Any]:
 
     r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_livre/", json={})
     if r.status_code not in (200, 201, 202):
-        return build_response(f"❌ Erreur API: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
+        return build_response(f"❌ Erreur API arrivée livraison: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
 
     return build_response(
         f"📍 Mission #{mid} marquée comme *arrivé à la livraison*.",
@@ -287,12 +294,12 @@ def action_livree(session: Dict[str, Any]) -> Dict[str, Any]:
     if not mid:
         return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
 
-    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_recupere/", json={})
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_livre/", json={})
     if r.status_code not in (200, 201, 202):
-        return build_response(f"❌ Erreur API: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
+        return build_response(f"❌ Erreur API livraison finale: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
 
     return build_response(
-        f"✅ Mission #{mid} terminée avec succès.\nMerci pour ta livraison 🚚",
+        f"✅ Mission #{mid} livrée avec succès 🚚",
         ["Mes missions", "Menu"]
     )
 
