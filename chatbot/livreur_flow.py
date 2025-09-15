@@ -121,19 +121,49 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
 
 
 def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
-    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mission_id}/accepter/", json={})
+    # Charger les détails de la mission
+    m = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
+    if m.status_code != 200:
+        return build_response("❌ Mission introuvable.", MAIN_MENU_BTNS)
+    mj = m.json()
+
+    # Récupérer l’ID du livreur connecté
+    me = api_request(session, "GET", "/api/v1/auth/livreurs/my_profile/")
+    if me.status_code != 200:
+        return build_response("❌ Profil livreur introuvable.", MAIN_MENU_BTNS)
+    livreur_id = me.json().get("id")
+
+    # Construire le payload complet
+    payload = {
+        "numero_mission": mj.get("numero_mission"),
+        "entreprise_demandeur": mj.get("entreprise_demandeur"),
+        "contact_entreprise": mj.get("contact_entreprise"),
+        "adresse_recuperation": mj.get("adresse_recuperation"),
+        "coordonnees_recuperation": mj.get("coordonnees_recuperation"),
+        "adresse_livraison": mj.get("adresse_livraison"),
+        "coordonnees_livraison": mj.get("coordonnees_livraison"),
+        "nom_client_final": mj.get("nom_client_final"),
+        "telephone_client_final": mj.get("telephone_client_final"),
+        "description_produit": mj.get("description_produit"),
+        "valeur_produit": mj.get("valeur_produit"),
+        "montant_coursier": mj.get("montant_coursier"),
+        "type_paiement": mj.get("type_paiement"),
+        "statut": "pending",  # selon ton API
+        "is_haute_valeur": mj.get("is_haute_valeur", False),
+        "livreur": livreur_id,
+    }
+
+    # Appel API pour accepter
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mission_id}/accepter/", json=payload)
     if r.status_code not in (200, 201):
-        return build_response("❌ Impossible d’accepter cette mission (déjà prise ?).", MAIN_MENU_BTNS)
+        return build_response(f"❌ Erreur API: {r.status_code}\n{r.text}", MAIN_MENU_BTNS)
 
     session.setdefault("ctx", {})["current_mission_id"] = mission_id
 
-    m = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
-    liv_id = None
-    if m.status_code == 200:
-        mj = m.json()
-        liv_id = (mj.get("livraison") or {}).get("id") or mj.get("livraison_id")
-        if liv_id:
-            session["ctx"]["current_livraison_id"] = liv_id
+    # Vérifier livraison associée
+    liv_id = (mj.get("livraison") or {}).get("id") or mj.get("livraison_id")
+    if liv_id:
+        session["ctx"]["current_livraison_id"] = liv_id
 
     txt = f"✅ Mission #{mission_id} acceptée."
     if liv_id:
