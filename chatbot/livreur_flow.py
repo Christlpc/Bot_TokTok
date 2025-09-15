@@ -182,9 +182,6 @@ def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]
     txt = f"✅ Mission #{mission_id} acceptée.\n👉 Tu peux *Démarrer* 🚀"
     return build_response(txt, ["Démarrer", "Mes missions", "Menu"])
 
-
-
-
 def refuser_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     return build_response(f"🚫 Mission #{mission_id} refusée.", MAIN_MENU_BTNS)
 
@@ -194,18 +191,19 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
     if not mid:
         return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
 
-    # Charger mission pour construire le payload
+    # 1) Charger mission (pour payload)
     m = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
     if m.status_code != 200:
         return build_response("❌ Impossible de charger la mission.", ["Mes missions", "Menu"])
     mj = m.json()
 
-    # Charger profil livreur
+    # 2) Profil livreur
     me = api_request(session, "GET", "/api/v1/auth/livreurs/my_profile/")
     if me.status_code != 200:
         return build_response("❌ Profil livreur introuvable.", ["Mes missions", "Menu"])
     livreur_id = me.json().get("id")
 
+    # 3) Payload complet exigé par l’API
     payload = {
         "mission_id": int(mid),
         "commande_id": mj.get("commande_id") or 0,
@@ -218,18 +216,46 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
         "livreur": livreur_id,
     }
 
-    # Création de la livraison
+    # 4) Création livraison
     r = api_request(session, "POST", "/api/v1/livraisons/livraisons/", json=payload)
-    if r.status_code not in (200, 201):
+    if r.status_code not in (200, 201, 202):
         return build_response(f"❌ Échec de démarrage de la mission.\n{r.text}", ["Mes missions", "Menu"])
 
-    livraison = r.json() or {}
-    liv_id = livraison.get("id") or livraison.get("livraison_id")
+    # 5) Récup ID livraison:
+    #    a) champ JSON id / livraison_id / pk
+    #    b) header Location / Content-Location
+    #    c) fallback: relire la mission qui se voit liée à la livraison
+    livraison = {}
+    try:
+        livraison = r.json() or {}
+    except Exception:
+        livraison = {}
+
+    liv_id = (
+        livraison.get("id")
+        or livraison.get("livraison_id")
+        or livraison.get("pk")
+    )
+
+    if not liv_id:
+        loc = r.headers.get("Location") or r.headers.get("Content-Location")
+        if loc:
+            mloc = re.search(r"/(\d+)/?$", loc)
+            if mloc:
+                liv_id = mloc.group(1)
+
+    if not liv_id:
+        m2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mid}/")
+        if m2.status_code == 200:
+            mj2 = m2.json()
+            liv_id = (mj2.get("livraison") or {}).get("id") or mj2.get("livraison_id")
+
     if liv_id:
         session.setdefault("ctx", {})["current_livraison_id"] = liv_id
 
     return build_response(
-        f"✅ Livraison #{liv_id or '?'} créée et mission #{mid} démarrée.\n🚴 En route vers le pickup.",
+        f"✅ Livraison #{liv_id or '?'} créée et mission #{mid} démarrée.\n"
+        "🚴 En route vers le pickup.",
         ["Arrivé pickup", "Mes missions", "Menu"]
     )
 
@@ -242,17 +268,34 @@ def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def action_arrive_drop(session: Dict[str, Any]) -> Dict[str, Any]:
-    resp = set_statut_simple(session, "arrive_livraison")
-    if "response" in resp:
-        resp["response"] += "\n📍 Tu es arrivé au point de livraison."
-    return resp
+    mid = (session.get("ctx") or {}).get("current_mission_id")
+    if not mid:
+        return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
+
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_livre/", json={})
+    if r.status_code not in (200, 201, 202):
+        return build_response(f"❌ Erreur API: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
+
+    return build_response(
+        f"📍 Mission #{mid} marquée comme *arrivé à la livraison*.",
+        ["Livrée", "Mes missions", "Menu"]
+    )
 
 
 def action_livree(session: Dict[str, Any]) -> Dict[str, Any]:
-    resp = set_statut_simple(session, "livree")
-    if "response" in resp:
-        resp["response"] += "\n✅ Livraison terminée avec succès."
-    return resp
+    mid = (session.get("ctx") or {}).get("current_mission_id")
+    if not mid:
+        return build_response("❌ Aucune mission en cours.", ["Mes missions", "Menu"])
+
+    r = api_request(session, "POST", f"/api/v1/coursier/missions/{mid}/marquer_recupere/", json={})
+    if r.status_code not in (200, 201, 202):
+        return build_response(f"❌ Erreur API: {r.status_code}\n{r.text}", ["Mes missions", "Menu"])
+
+    return build_response(
+        f"✅ Mission #{mid} terminée avec succès.\nMerci pour ta livraison 🚚",
+        ["Mes missions", "Menu"]
+    )
+
 
 # ---------- Helpers livraisons ----------
 def _ensure_livraison_id(session: Dict[str, Any]) -> Optional[str]:
@@ -277,6 +320,8 @@ def _update_statut(session: Dict[str, Any], livraison_id: str, statut: str) -> D
     r = api_request(session, "POST", f"/api/v1/livraisons/livraisons/{livraison_id}/update_statut/", json=payload)
     if r.status_code not in (200, 202):
         return build_response("❌ Échec de mise à jour du statut.", ACTIONS_BTNS)
+    # mémorise pour update_position (choix du champ récup/livraison)
+    session.setdefault("ctx", {})["last_statut"] = statut
     return build_response(f"✅ Statut mis à jour: *{statut}*.", ACTIONS_BTNS)
 
 
