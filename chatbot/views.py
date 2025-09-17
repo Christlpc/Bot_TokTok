@@ -92,12 +92,31 @@ def whatsapp_webhook(request):
                             text = row.get("title") or "Menu"
 
                 # Localisation
+                # Localisation
                 elif msg_type == "location":
                     lat = msg["location"]["latitude"]
                     lng = msg["location"]["longitude"]
-                    session["profile"]["gps"] = f"{lat},{lng}"
-                    logger.info(f"[WA] Localisation reçue de {mask_sensitive(from_number)}: {lat},{lng}")
-                    text = "LOCATION_SHARED"
+
+                    # Cas inscription entreprise (merchant signup)
+                    if session.get("step") == "SIGNUP_MARCHAND_GPS":
+                        session.setdefault("signup", {}).setdefault("data", {})["coordonnees_gps"] = f"{lat},{lng}"
+                        session["step"] = "SIGNUP_MARCHAND_RCCM"
+                        text = "LOCATION_SHARED"
+
+                    # Cas client qui crée une mission coursier
+                    elif session.get("step") == "COURIER_DEPART":
+                        nr = session.setdefault("new_request", {})
+                        nr["depart"] = f"{lat},{lng}"
+                        nr["coordonnees_gps"] = f"{lat},{lng}"
+                        session["step"] = "COURIER_DEST"
+                        text = "LOCATION_SHARED"
+
+                    # Autres cas (fallback si profil déjà existant)
+                    else:
+                        session.setdefault("profile", {})["gps"] = f"{lat},{lng}"
+                        text = "LOCATION_SHARED"
+
+                    logger.info(f"[WA] Localisation reçue de {from_number}: {lat},{lng}")
 
                 # Passage au moteur
                 bot_output = handle_incoming(
