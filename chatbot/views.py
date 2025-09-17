@@ -1,4 +1,3 @@
-# chatbot/views.py
 import json, logging, time
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -9,7 +8,8 @@ from .utils import (
     send_whatsapp_buttons,
     send_whatsapp_location_request,
     send_whatsapp_media_url,
-    send_whatsapp_list, ACCESS_TOKEN,
+    send_whatsapp_list,
+    ACCESS_TOKEN,
 )
 from .router import handle_incoming        # ⇦ point d'entrée unique
 from .auth_core import get_session         # ⇦ sessions partagées
@@ -44,10 +44,15 @@ def _seen_wamid(wamid: str) -> bool:
 
 
 @csrf_exempt
-@csrf_exempt
 def whatsapp_webhook(request):
     if request.method == "GET":
-        ...
+        mode = request.GET.get("hub.mode")
+        token = request.GET.get("hub.verify_token")
+        challenge = request.GET.get("hub.challenge")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return HttpResponse(challenge, status=200)
+        return HttpResponse("Verification failed", status=403)
+
     if request.method == "POST":
         body = json.loads(request.body.decode("utf-8"))
         try:
@@ -55,80 +60,110 @@ def whatsapp_webhook(request):
             changes = entry["changes"][0]["value"]
             messages = changes.get("messages")
 
-            if messages:
-                msg = messages[0]
-                wamid = msg.get("id") or msg.get("wamid")
-                if _seen_wamid(wamid):
-                    return JsonResponse({"status": "ok"}, status=200)
+            if not messages:
+                return JsonResponse({"status": "ok"}, status=200)
 
-                from_number = msg["from"]
-                session = get_session(from_number)
+            msg = messages[0]
+            wamid = msg.get("id") or msg.get("wamid")
+            if _seen_wamid(wamid):
+                logger.info("[WA] duplicate webhook ignored", extra={"wamid": wamid})
+                return JsonResponse({"status": "ok"}, status=200)
 
-                msg_type = msg.get("type")
-                text, lat, lng, media_url = "", None, None, None
+            from_number = msg["from"]
+            session = get_session(from_number)
 
-                if msg_type == "text":
-                    text = msg["text"]["body"]
+            msg_type = msg.get("type")
+            text = ""
+            media_url = None
 
-                elif msg_type == "interactive":
-                    inter = msg["interactive"]
-                    itype = inter.get("type")
-                    if itype == "button_reply":
-                        text = inter["button_reply"]["title"]
-                    elif itype == "list_reply":
-                        row = inter["list_reply"]
-                        row_id = row.get("id", "")
-                        if row_id.startswith("accept_"):
-                            text = f"Accepter {row_id.split('_',1)[1]}"
-                        elif row_id.startswith("details_"):
-                            text = f"Détails {row_id.split('_',1)[1]}"
-                        else:
-                            text = row.get("title") or "Menu"
+            # Texte simple
+            if msg_type == "text":
+                text = msg["text"]["body"]
 
-                elif msg_type == "image":
-                    media = msg.get("image", {})
-                    media_id = media.get("id")
-                    if media_id:
-                        r = requests.get(
-                            f"https://graph.facebook.com/v19.0/{media_id}",
-                            headers={"Authorization": f"Bearer {ACCESS_TOKEN}"}
-                        )
-                        if r.status_code == 200:
-                            media_url = r.json().get("url")
+            # Boutons & Listes
+            elif msg_type == "interactive":
+                inter = msg["interactive"]
+                itype = inter.get("type")
+                if itype == "button_reply":
+                    text = inter["button_reply"]["title"]
+                elif itype == "list_reply":
+                    row = inter["list_reply"]
+                    row_id = row.get("id", "")
+                    if row_id.startswith("accept_"):
+                        text = f"Accepter {row_id.split('_',1)[1]}"
+                    elif row_id.startswith("details_"):
+                        text = f"Détails {row_id.split('_',1)[1]}"
+                    else:
+                        text = row.get("title") or "Menu"
 
-                elif msg_type == "location":
-                    lat = msg["location"]["latitude"]
-                    lng = msg["location"]["longitude"]
-                    if session.get("step") == "SIGNUP_MARCHAND_GPS":
-                        session.setdefault("signup", {}).setdefault("data", {})["coordonnees_gps"] = f"{lat},{lng}"
-                        session["step"] = "SIGNUP_MARCHAND_RCCM"
-                    elif session.get("step") == "COURIER_DEPART":
-                        nr = session.setdefault("new_request", {})
-                        nr["depart"] = f"{lat},{lng}"
-                        nr["coordonnees_gps"] = f"{lat},{lng}"
-                        session["step"] = "COURIER_DEST"
+            # Image
+            elif msg_type == "image":
+                media = msg.get("image", {})
+                media_id = media.get("id")
+                if media_id:
+                    r = requests.get(
+                        f"https://graph.facebook.com/v19.0/{media_id}",
+                        headers={"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    )
+                    if r.status_code == 200:
+                        media_url = r.json().get("url")
+                text = ""  # pas de texte associé
 
-                # Passage unique au moteur
-                bot_output = handle_incoming(
+            # Localisation
+            elif msg_type == "location":
+                lat = msg["location"]["latitude"]
+                lng = msg["location"]["longitude"]
+
+                if session.get("step") == "SIGNUP_MARCHAND_GPS":
+                    session.setdefault("signup", {}).setdefault("data", {})["coordonnees_gps"] = f"{lat},{lng}"
+                    session["step"] = "SIGNUP_MARCHAND_RCCM"
+                    text = "LOCATION_SHARED"
+
+                elif session.get("step") == "COURIER_DEPART":
+                    nr = session.setdefault("new_request", {})
+                    nr["depart"] = f"{lat},{lng}"
+                    nr["coordonnees_gps"] = f"{lat},{lng}"
+                    session["step"] = "COURIER_DEST"
+                    text = "LOCATION_SHARED"
+
+                else:  # fallback profil
+                    session.setdefault("profile", {})["gps"] = f"{lat},{lng}"
+                    text = "LOCATION_SHARED"
+
+                logger.info(f"[WA] Localisation reçue de {from_number}: {lat},{lng}")
+
+            # Passage au moteur
+            bot_output = handle_incoming(
+                from_number,
+                text,
+                lat=msg.get("location", {}).get("latitude") if msg_type == "location" else None,
+                lng=msg.get("location", {}).get("longitude") if msg_type == "location" else None,
+                media_url=media_url if media_url else None,
+                wa_message_id=wamid,
+                wa_timestamp=msg.get("timestamp"),
+                wa_type=msg_type,
+            )
+
+            # Localisation demandée explicitement
+            if session.get("step") == "COURIER_DEPART":
+                send_whatsapp_location_request(from_number)
+                return JsonResponse({"status": "ok"}, status=200)
+
+            # Réponse selon type
+            if "list" in bot_output:
+                send_whatsapp_list(
                     from_number,
-                    text,
-                    lat=lat, lng=lng,
-                    media_url=media_url,
-                    wa_message_id=wamid,
-                    wa_timestamp=msg.get("timestamp"),
-                    wa_type=msg_type,
+                    bot_output.get("response", ""),
+                    bot_output["list"]["rows"],
+                    bot_output["list"].get("title", "Missions"),
                 )
-
-                # Réponses
-                if "list" in bot_output:
-                    send_whatsapp_list(...)
-                elif bot_output.get("buttons"):
-                    send_whatsapp_buttons(...)
-                elif bot_output.get("ask_location"):
-                    msg_txt = bot_output["ask_location"] if isinstance(bot_output["ask_location"], str) else None
-                    send_whatsapp_location_request(from_number, msg_txt or "📍 Merci de partager votre localisation.")
-                else:
-                    send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
+            elif bot_output.get("buttons"):
+                send_whatsapp_buttons(from_number, bot_output.get("response", ""), bot_output["buttons"])
+            elif bot_output.get("ask_location"):
+                msg_txt = bot_output["ask_location"] if isinstance(bot_output["ask_location"], str) else None
+                send_whatsapp_location_request(from_number, msg_txt or "📍 Merci de partager votre localisation.")
+            else:
+                send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
 
         except Exception as e:
             logger.exception(f"[WA_WEBHOOK] Exception: {e}")
