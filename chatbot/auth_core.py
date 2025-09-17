@@ -319,11 +319,6 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         return resp
 
     # Traitement réception localisation (Webhook envoie lat/lng)
-    if lat is not None and lng is not None and session.get("step") == "SIGNUP_MARCHAND_GPS":
-        session["signup"]["data"]["coordonnees_gps"] = f"{lat},{lng}"
-        session["step"] = "SIGNUP_MARCHAND_RCCM"
-        return build_response("📄 *Numéro RCCM* ?")
-
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"
