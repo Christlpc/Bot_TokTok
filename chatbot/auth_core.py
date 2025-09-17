@@ -311,10 +311,13 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
         return build_response("📌 *Coordonnées GPS* (lat,lng) ?")
-    if session["step"] == "SIGNUP_MARCHAND_GPS":
-        session["signup"]["data"]["coordonnees_gps"] = t
-        session["step"] = "SIGNUP_MARCHAND_RCCM"
-        return build_response("📄 *Numéro RCCM* ?")
+    if session["step"] == "SIGNUP_MARCHAND_ADR":
+        session["signup"]["data"]["adresse"] = t
+        session["step"] = "SIGNUP_MARCHAND_GPS"
+        return {
+            "response": "📌 Merci de partager la *position exacte* de votre entreprise :",
+            "location_request": True  # flag spécial qu’on traite côté envoi WhatsApp
+        }
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"

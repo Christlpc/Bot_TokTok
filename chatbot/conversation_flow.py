@@ -336,7 +336,7 @@ def handle_message(
         return build_response(
             "👉 Choisissez une option :\n"
             "- *1* Nouvelle demande\n"
-            "- *2* Suivre ma livraison\n"
+            "- *2* Suivre ma demande\n"
             "- *3* Historique\n"
             "- *4* Marketplace",
             MAIN_MENU_BTNS
