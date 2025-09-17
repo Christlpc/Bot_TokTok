@@ -295,45 +295,56 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         return signup_submit(session, phone)
 
     # ----- Entreprise (ex Marchand) -----
+    # ----- Entreprise (ex Marchand) -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
         session["step"] = "SIGNUP_MARCHAND_TYPE"
         return build_response("🏷️ *Type d’entreprise* ? (ex: restaurant)")
+
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
         session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower())
         session["step"] = "SIGNUP_MARCHAND_DESC"
         return build_response("📝 *Description* ?")
+
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
         session["step"] = "SIGNUP_MARCHAND_ADR"
         return build_response("📍 *Adresse* de l’entreprise ?")
+
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
-        resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise :")
-        resp["ask_location"] = True  # 👉 webhook déclenchera send_whatsapp_location_request
+        resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise ou entrez-la manuellement.")
+        resp["ask_location"] = True  # 👉 le webhook enverra send_whatsapp_location_request()
         return resp
 
-    if session["step"] == "SIGNUP_MARCHAND_GPS":
-        # ici tu ne traites rien, car c’est ton webhook qui va capter la location
-        return build_response("📌 Veuillez partager votre position via le bouton ci-dessus.")
+    # Traitement réception localisation (Webhook envoie lat/lng)
+    if lat is not None and lng is not None and session.get("step") == "SIGNUP_MARCHAND_GPS":
+        session["signup"]["data"]["coordonnees_gps"] = f"{lat},{lng}"
+        session["step"] = "SIGNUP_MARCHAND_RCCM"
+        return build_response("📄 *Numéro RCCM* ?")
+
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"
         return build_response("⏰ *Horaires d’ouverture* ?")
+
     if session["step"] == "SIGNUP_MARCHAND_HOR":
         session["signup"]["data"]["horaires_ouverture"] = t
         session["step"] = "SIGNUP_MARCHAND_CONTACT"
         return build_response("👤 *Prénom Nom* du responsable ?")
+
     if session["step"] == "SIGNUP_MARCHAND_CONTACT":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_MARCHAND_EMAIL"
         return build_response("📧 *Email* du responsable ?")
+
     if session["step"] == "SIGNUP_MARCHAND_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_MARCHAND_PASSWORD"
-        return build_response("🔑 *Entreprise* — Choisissez un *mot de passe*.")  # <- corrigé
+        return build_response("🔑 *Entreprise* — Choisissez un *mot de passe*.")
+
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
