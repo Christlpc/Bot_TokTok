@@ -215,12 +215,17 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
         return build_response("❌ Échec de création du produit. Vérifiez vos champs.", ["Mes produits","Menu"])
 
     p = r.json()
+    prod_id = p.get("id") or (p.get("produit") or {}).get("id")
+    prod_nom = p.get("nom") or (p.get("produit") or {}).get("nom")
+
     session["step"] = "ENTREPRISE_MENU"
     session["ctx"].pop("new_product", None)
+
     return build_response(
-        f"✅ Produit #{p.get('id')} *{p.get('nom')}* créé.",
-        ["Mes produits","Commandes","Menu"]
+        f"✅ Produit #{prod_id} *{prod_nom}* créé.",
+        ["Mes produits", "Commandes", "Menu"]
     )
+
 
 # -----------------------------
 # Commandes
