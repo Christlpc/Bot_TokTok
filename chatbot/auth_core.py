@@ -315,7 +315,7 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
         resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise ou entrez-la manuellement.")
-        resp["ask_location"] = True  # 👉 le webhook enverra send_whatsapp_location_request()
+        resp["ask_location"] = "📌 Merci de partager la *position exacte* de votre entreprise :"
         return resp
 
     # Traitement réception localisation (Webhook envoie lat/lng)

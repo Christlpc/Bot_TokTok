@@ -59,7 +59,7 @@ def send_whatsapp_buttons(to, body_text, buttons):
     print("Réponse API boutons:", res.text)
     return res.json()
 
-def send_whatsapp_location_request(to):
+def send_whatsapp_location_request(to: str, message: str = "📍 Merci de partager votre localisation."):
     """Demande officielle de localisation (WhatsApp Cloud API)"""
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -69,7 +69,7 @@ def send_whatsapp_location_request(to):
         "interactive": {
             "type": "location_request_message",
             "body": {
-                "text": "📍 Merci de partager la *localisation de départ* du colis"
+                "text": message
             },
             "action": {
                 "name": "send_location"

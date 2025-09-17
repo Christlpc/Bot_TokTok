@@ -347,7 +347,7 @@ def handle_message(
         # On enclenche la demande de localisation
         session["step"] = "COURIER_DEPART"
         resp = build_response("📍 Partagez votre *localisation de départ* ou entrez l’adresse manuellement.")
-        resp["ask_location"] = True  # ← webhook doit appeler send_whatsapp_location_request(to)
+        resp["ask_location"] = "📍 Merci de partager votre localisation." # message par défaut
         return resp
 
     if t in {"2","suivre","suivre ma livraison"}:
