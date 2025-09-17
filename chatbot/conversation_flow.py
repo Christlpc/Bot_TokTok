@@ -112,35 +112,57 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------
 def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "FOLLOW_WAIT"
-    return build_response("🔎 Entrez l'ID de votre livraison.")
+    return build_response("🔎 Entrez l'ID (mission) de votre livraison.")
 
 def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
-        r = api_request(session, "GET", f"/api/v1/livraisons/livraisons/{text}/")
+        r = api_request(session, "GET", f"/api/v1/coursier/missions/{text}/")
         if r.status_code == 404:
             return build_response("❌ Livraison introuvable.", MAIN_MENU_BTNS)
         r.raise_for_status()
         d = r.json()
-        return build_response(
-            f"📦 Livraison #{d.get('id')}\n"
-            f"Statut: {d.get('statut','-')}\n"
-            f"Départ: {d.get('adresse_recuperation','-')}\n"
-            f"Arrivée: {d.get('adresse_livraison','-')}",
-            MAIN_MENU_BTNS,
+
+        recap = (
+            f"📦 Mission #{d.get('id')} — {d.get('statut','-')}\n"
+            f"🚏 Départ : {d.get('adresse_recuperation','-')}\n"
+            f"📍 Arrivée : {d.get('adresse_livraison','-')}\n"
+            f"👤 Client : {d.get('nom_client_final','-')} ({d.get('telephone_client_final','-')})\n"
+            f"💰 Valeur : {d.get('valeur_produit','-')} FCFA\n"
         )
+
+        # Ajouter infos livreur si dispo
+        if d.get("livreur_nom"):
+            recap += f"\n🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})"
+
+        return build_response(recap, MAIN_MENU_BTNS)
+
     except Exception as e:
         logger.error(f"[FOLLOW] {e}")
         return build_response("❌ Erreur lors du suivi.", MAIN_MENU_BTNS)
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        r = api_request(session, "GET", "/api/v1/coursier/missions/")
+        user_id = (session.get("user") or {}).get("id")
+        if not user_id:
+            return build_response("⚠️ Impossible de charger l’historique (non connecté).", MAIN_MENU_BTNS)
+
+        r = api_request(session, "GET", f"/api/v1/coursier/missions/?client_id={user_id}")
         r.raise_for_status()
         data = r.json() or []
+
         if not data:
             return build_response("🗂️ Aucun historique disponible.", MAIN_MENU_BTNS)
-        lines = [f"#{d.get('id')} — {d.get('statut','')} → {d.get('adresse_livraison','')}" for d in data[:5]]
+
+        # On affiche max 5 dernières missions
+        lines = []
+        for d in data[:5]:
+            lines.append(
+                f"#{d.get('id')} — {d.get('statut','')} "
+                f"→ {d.get('adresse_livraison','')}"
+            )
+
         return build_response("🗂️ Vos 5 dernières livraisons :\n" + "\n".join(lines), MAIN_MENU_BTNS)
+
     except Exception as e:
         logger.error(f"[HISTORY] {e}")
         return build_response("❌ Erreur lors du chargement de l'historique.", MAIN_MENU_BTNS)
