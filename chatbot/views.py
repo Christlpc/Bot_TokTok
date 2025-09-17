@@ -125,6 +125,8 @@ def whatsapp_webhook(request):
                     )
                 elif bot_output.get("buttons"):
                     send_whatsapp_buttons(from_number, bot_output["response"], bot_output["buttons"])
+                elif bot_output.get("ask_location"):
+                    send_whatsapp_location_request(from_number)
                 else:
                     send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
 
