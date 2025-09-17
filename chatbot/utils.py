@@ -184,3 +184,30 @@ def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "
     res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
     print("Réponse API list:", res.text)
     return res.json()
+
+def dispatch_whatsapp_message(to: str, resp: dict):
+    """
+    Envoie la réponse générée par le bot via la bonne fonction WhatsApp.
+    - Texte simple
+    - Boutons
+    - Demande de localisation
+    - Listes (si resp['list'] existe)
+    """
+    text = resp.get("response", "")
+
+    # Cas localisation
+    if resp.get("location_request"):
+        return send_whatsapp_location_request(to)
+
+    # Cas boutons
+    if "buttons" in resp:
+        return send_whatsapp_buttons(to, text, resp["buttons"])
+
+    # Cas liste (optionnel si tu ajoutes un flag 'list')
+    if resp.get("list"):
+        rows = resp["list"].get("rows", [])
+        title = resp["list"].get("title", "Options")
+        return send_whatsapp_list(to, text, rows, title=title)
+
+    # Fallback texte
+    return send_whatsapp_message(to, text)

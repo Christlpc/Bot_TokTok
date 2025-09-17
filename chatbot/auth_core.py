@@ -310,10 +310,10 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
-        return {
-            "response": "📌 Merci de partager la *position exacte* de votre entreprise :",
-            "location_request": True  # flag spécial à traiter côté envoi WhatsApp
-        }
+        resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise :")
+        resp["ask_location"] = True  # 👉 webhook déclenchera send_whatsapp_location_request
+        return resp
+
     if session["step"] == "SIGNUP_MARCHAND_GPS":
         # ici tu ne traites rien, car c’est ton webhook qui va capter la location
         return build_response("📌 Veuillez partager votre position via le bouton ci-dessus.")
