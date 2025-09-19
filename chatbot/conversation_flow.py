@@ -53,6 +53,14 @@ def format_date(iso_str: str) -> str:
     except Exception:
         return iso_str
 
+def _extract_results(payload):
+    """Tolère API qui renvoie list ou dict{results: list}"""
+    if isinstance(payload, dict) and "results" in payload and isinstance(payload["results"], list):
+        return payload["results"]
+    if isinstance(payload, list):
+        return payload
+    return []
+
 # ------------------------------------------------------
 # IA Fallback (OpenAI)
 # ------------------------------------------------------
@@ -107,71 +115,104 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         r.raise_for_status()
         mission = r.json()
         session["step"] = "MENU"
-        return build_response(
-            f"✅ Mission #{mission.get('id')} créée.\n🚴 Un livreur va accepter la course.",
-            MAIN_MENU_BTNS
+
+        # UX: ne jamais exposer l'ID BDD — on communique la référence publique
+        ref = mission.get("numero_mission") or f"M-{mission.get('id','')}"
+        msg = (
+            "✅ Demande enregistrée.\n"
+            f"🔖 *Référence* : {ref}\n"
+            "🚴 Un livreur va accepter la course."
         )
+        return build_response(msg, MAIN_MENU_BTNS)
     except Exception as e:
         logger.error(f"[COURIER] create error: {e}")
-        return build_response("❌ Erreur lors de la création de la mission.", MAIN_MENU_BTNS)
+        return build_response("❌ Erreur lors de la création de la demande.", MAIN_MENU_BTNS)
 
 # ------------------------------------------------------
-# Suivi & Historique
+# Suivi & Historique (côté client)
 # ------------------------------------------------------
 def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "FOLLOW_WAIT"
-    return build_response("🔎 Entrez l'ID (mission) de votre demande.")
+    return build_response("🔎 Entrez la *référence* de votre demande (ex: COUR-20250919-001).")
 
-def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+def follow_lookup(session: Dict[str, Any], ref_input: str) -> Dict[str, Any]:
+    """
+    ⚠️ L'API n'accepte que l'ID en /{id}/.
+    → Stratégie: on liste les missions du client via GET /api/v1/coursier/missions/
+      puis on retrouve localement celle dont numero_mission == ref_input.
+      Ensuite, on appelle /{id}/ pour le détail.
+    """
     try:
-        r = api_request(session, "GET", f"/api/v1/coursier/missions/{text}/")
-        if r.status_code == 404:
-            return build_response("❌ Demande introuvable.", MAIN_MENU_BTNS)
+        user = session.get("user") or {}
+        if not user.get("id"):
+            return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
+
+        # 1) Lister les missions de CE client
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
+        r.raise_for_status()
+        missions = _extract_results(r.json())
+
+        # 2) Retrouver par référence (case-sensitive côté API le plus souvent)
+        ref = (ref_input or "").strip()
+        mission = next((m for m in missions if (m.get("numero_mission") or "").strip() == ref), None)
+        if not mission:
+            session["step"] = "MENU"
+            return build_response("❌ Demande introuvable. Vérifiez la *référence* saisie.", MAIN_MENU_BTNS)
+
+        mission_id = mission.get("id")
+        if not mission_id:
+            session["step"] = "MENU"
+            return build_response("❌ Référence invalide.", MAIN_MENU_BTNS)
+
+        # 3) Détail par ID
+        r = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
         r.raise_for_status()
         d = r.json()
 
-        # Étape 1 : infos générales
+        # 4) Récap UX (2 étapes)
         recap = (
-            f"📦 Mission #{d.get('id')} — {d.get('statut','-')}\n"
-            f"🚏 Départ : {d.get('adresse_recuperation','-')}\n"
-            f"📍 Arrivée : {d.get('adresse_livraison','-')}\n"
-            f"💰 Valeur : {d.get('valeur_produit','-')} FCFA\n"
+            f"📦 Demande *{d.get('numero_mission','-')}* — *{d.get('statut','-')}*\n"
+            f"🚏 *Départ* : {d.get('adresse_recuperation','-')}\n"
+            f"📍 *Arrivée* : {d.get('adresse_livraison','-')}\n"
+            f"💰 *Valeur* : {d.get('valeur_produit','-')} FCFA\n"
         )
 
-        # Étape 2 : détails si mission assignée
         if d.get("statut") in {"assigned", "en_route", "completed"}:
-            recap += (
-                f"\n🔖 Réf : {d.get('numero_mission','-')}\n"
-                f"📅 Créée le : {format_date(d.get('created_at','-'))}\n"
-            )
+            recap += f"\n📅 *Créée le* : {format_date(d.get('created_at','-'))}\n"
             if d.get("livreur_nom"):
-                recap += f"🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})\n"
+                recap += f"🚴 *Livreur* : {d['livreur_nom']} ({d.get('livreur_telephone','-')})\n"
             if d.get("distance_estimee"):
-                recap += f"📏 Distance estimée : {d['distance_estimee']}\n"
+                recap += f"📏 *Distance estimée* : {d['distance_estimee']}\n"
 
         session["step"] = "MENU"
-        return build_response(recap.strip(), MAIN_MENU_BTNS)
+        # UX: proposer CTA utiles
+        return build_response(recap.strip(), ["Nouvelle demande", "Suivre ma demande", "Marketplace"])
 
     except Exception as e:
         logger.error(f"[FOLLOW] {e}")
+        session["step"] = "MENU"
         return build_response("❌ Erreur lors du suivi.", MAIN_MENU_BTNS)
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        user_id = (session.get("user") or {}).get("id")
-        if not user_id:
+        user = session.get("user") or {}
+        if not user.get("id"):
             return build_response("⚠️ Impossible de charger l’historique (non connecté).", MAIN_MENU_BTNS)
 
-        r = api_request(session, "GET", f"/api/v1/coursier/missions/?client_id={user_id}")
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
-        data = r.json() or []
+        data = _extract_results(r.json())
 
         if not data:
             return build_response("🗂️ Aucun historique disponible.", MAIN_MENU_BTNS)
 
+        # Top 5, avec référence uniquement (pas d'ID BDD)
         lines = []
         for d in data[:5]:
-            lines.append(f"#{d.get('id')} — {d.get('statut','')} → {d.get('adresse_livraison','')}")
+            ref = d.get("numero_mission", "—")
+            statut = d.get("statut", "—")
+            dest = d.get("adresse_livraison", "—")
+            lines.append(f"• {ref} — {statut} → {dest}")
 
         return build_response("🗂️ Vos 5 dernières demandes :\n" + "\n".join(lines), MAIN_MENU_BTNS)
 
@@ -329,10 +370,12 @@ def handle_message(
     session = get_session(phone)
     t = normalize(text).lower()
 
+    # Auth
     if not (session.get("auth") or {}).get("access"):
         session["step"] = "WELCOME"
         return build_response(WELCOME_TEXT, WELCOME_BTNS)
 
+    # Menu
     if t in GREETINGS:
         session["step"] = "MENU"
         return build_response(
@@ -344,6 +387,7 @@ def handle_message(
             MAIN_MENU_BTNS
         )
 
+    # Entrée menu rapide
     if t in {"1","nouvelle demande","coursier"}:
         session["step"] = "COURIER_DEPART"
         resp = build_response("📍 Partagez votre *localisation de départ* ou entrez l’adresse manuellement.")
@@ -359,6 +403,7 @@ def handle_message(
     if t in {"4","marketplace"}:
         return handle_marketplace(session)
 
+    # --- Localisation ---
     if lat is not None and lng is not None:
         if session.get("step") == "COURIER_DEPART":
             nr = session.setdefault("new_request", {})
@@ -367,6 +412,7 @@ def handle_message(
             session["step"] = "COURIER_DEST"
             return build_response("✅ Localisation enregistrée.\n📍 Maintenant, quelle est l’adresse de *destination* ?")
 
+    # --- Wizard création mission ---
     if session.get("step") == "COURIER_DEPART":
         session.setdefault("new_request", {})["depart"] = text
         session["step"] = "COURIER_DEST"
@@ -429,9 +475,11 @@ def handle_message(
             return build_response("📦 Entrez la *nouvelle description* du colis.")
         return build_response("👉 Choisissez *Départ*, *Destination*, *Valeur* ou *Description*.", ["Départ","Destination","Valeur","Description"])
 
+    # --- Suivi par référence ---
     if session.get("step") == "FOLLOW_WAIT":
         return follow_lookup(session, text)
 
+    # --- Marketplace flow ---
     if session.get("step") == "MARKET_CATEGORY":
         return handle_marketplace_category(session, text)
     if session.get("step") == "MARKET_MERCHANT":
@@ -439,4 +487,5 @@ def handle_message(
     if session.get("step") == "MARKET_PRODUCTS":
         return handle_marketplace_product(session, text)
 
+    # Fallback IA
     return ai_fallback(text, phone)
