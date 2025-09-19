@@ -137,22 +137,21 @@ def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
 
 def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
-        # Vérifier si connecté
-        user_id = (session.get("user") or {}).get("id")
-        if not user_id:
+        # Vérifier qu'on a bien un token
+        if not (session.get("auth") or {}).get("access"):
             return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
 
-        # Récupérer toutes les missions du client
+        # Charger toutes les missions du client via son token
         r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
         all_missions = r.json() or []
 
-        # Chercher par référence (numero_mission)
+        # Chercher la mission par référence (numero_mission)
         mission = next((m for m in all_missions if m.get("numero_mission") == text.strip()), None)
         if not mission:
             return build_response(f"❌ Aucune demande trouvée avec la référence *{text}*.", MAIN_MENU_BTNS)
 
-        # Charger le détail avec l'id
+        # Récupérer détail complet avec l'id
         mission_id = mission.get("id")
         r2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
         r2.raise_for_status()
@@ -168,10 +167,7 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
 
         # Étape 2 : détails si mission assignée
         if d.get("statut") in {"assigned", "en_route", "completed"}:
-            recap += (
-                f"\n🔖 Réf interne : {d.get('id')}\n"
-                f"📅 Créée le : {d.get('created_at','-')}\n"
-            )
+            recap += f"\n📅 Créée le : {d.get('created_at','-')}\n"
             if d.get("livreur_nom"):
                 recap += f"🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})\n"
             if d.get("distance_estimee"):
