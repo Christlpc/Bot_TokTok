@@ -132,34 +132,90 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
 # Suivi & Historique (côté client)
 # ------------------------------------------------------
 def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Demande au client quelle mission suivre, avec un aperçu des dernières."""
     session["step"] = "FOLLOW_WAIT"
-    return build_response("🔎 Entrez la *référence* de votre demande (ex: COUR-20250919-001).")
 
-def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
         if not (session.get("auth") or {}).get("access"):
             return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
 
-        # Charger les missions du client (réponse paginée)
+        # Charger dernières missions du client
         r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
         data = r.json() or {}
+        missions = data.get("results", [])[:3]  # limiter aux 3 dernières
 
+        if not missions:
+            return build_response("🗂️ Vous n’avez aucune demande en cours.", MAIN_MENU_BTNS)
+
+        # Construire un aperçu UX avec ref courte (#suffixe ou M-id)
+        lines = []
+        for m in missions:
+            ref_long = m.get("numero_mission", "-")
+            suffix = ref_long.split("-")[-1] if ref_long else "?"
+            ref_courte = f"#{suffix}"  # ex: #003
+            statut = m.get("statut", "-")
+            dest = m.get("adresse_livraison", "-")
+            lines.append(f"{ref_courte} → {dest} ({statut})")
+
+        txt = (
+            "🔎 Entrez la *référence* de votre demande "
+            "(ex: COUR-20250919-003 ou #003).\n\n"
+            "👉 Vos dernières demandes :\n" + "\n".join(lines)
+        )
+        return build_response(txt)
+
+    except Exception as e:
+        logger.error(f"[FOLLOW_LIST] {e}")
+        return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
+
+
+def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """Recherche mission par référence (longue ou courte)."""
+    try:
+        if not (session.get("auth") or {}).get("access"):
+            return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
+
+        # Charger missions du client
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
+        r.raise_for_status()
+        data = r.json() or {}
         all_missions = data.get("results", [])
 
-        # Chercher la mission par référence (numero_mission)
+        if not all_missions:
+            return build_response("❌ Vous n’avez aucune demande enregistrée.", MAIN_MENU_BTNS)
+
         ref = text.strip()
-        mission = next((m for m in all_missions if str(m.get("numero_mission")) == ref), None)
+
+        # 1. Chercher par référence longue exacte
+        mission = next((m for m in all_missions if m.get("numero_mission") == ref), None)
+
+        # 2. Sinon chercher par suffixe (#003 ou juste 003)
+        if not mission and ref.lstrip("#").isdigit():
+            suffix = ref.lstrip("#")
+            mission = next(
+                (m for m in all_missions if m.get("numero_mission", "").endswith(f"-{suffix}")),
+                None
+            )
+
+        # 3. Sinon chercher par alias type M-46
+        if not mission and ref.upper().startswith("M-") and ref[2:].isdigit():
+            alias = ref[2:]
+            mission = next(
+                (m for m in all_missions if str(m.get("id")) == alias),
+                None
+            )
+
         if not mission:
             return build_response(f"❌ Aucune demande trouvée avec la référence *{ref}*.", MAIN_MENU_BTNS)
 
-        # Charger détail complet avec l'id
+        # Charger détail complet via id
         mission_id = mission.get("id")
         r2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
         r2.raise_for_status()
         d = r2.json()
 
-        # Étape 1 : infos générales
+        # Étape 1 : résumé
         recap = (
             f"📦 Demande {d.get('numero_mission','-')} — {d.get('statut','-')}\n"
             f"🚏 Départ : {d.get('adresse_recuperation','-')}\n"
@@ -167,7 +223,7 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
             f"💰 Valeur : {d.get('valeur_produit','-')} FCFA\n"
         )
 
-        # Étape 2 : détails si mission assignée
+        # Étape 2 : détails si assignée
         if d.get("statut") in {"assigned", "en_route", "completed"}:
             recap += f"\n📅 Créée le : {d.get('created_at','-')}\n"
             if d.get("livreur_nom"):
@@ -178,7 +234,7 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
         return build_response(recap.strip(), MAIN_MENU_BTNS)
 
     except Exception as e:
-        logger.error(f"[FOLLOW] {e}")
+        logger.error(f"[FOLLOW_LOOKUP] {e}")
         return build_response("❌ Erreur lors du suivi.", MAIN_MENU_BTNS)
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
