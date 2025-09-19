@@ -232,28 +232,32 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         session["signup"]["role"] = role
         if role == "client":
             session["step"] = "SIGNUP_CLIENT_NAME"
-            return build_response("👤 *Client* — Votre *nom complet* ?")
+            return build_response("👤 *Client* — Votre *nom complet* ?\nExemple : `Jean Mbemba`")
         if role == "livreur":
             session["step"] = "SIGNUP_LIVREUR_NAME"
-            return build_response("🚴 *Livreur* — Votre *nom complet* ?")
+            return build_response("🚴 *Livreur* — Votre *nom complet* ?\nExemple : `Paul Ngoma`")
         if role == "entreprise":
             session["step"] = "SIGNUP_MARCHAND_ENTREPRISE"
-            return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?")
+            return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?\nExemple : `Savana Restaurant`")
 
     # ----- Client -----
     if session["step"] == "SIGNUP_CLIENT_NAME":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_CLIENT_EMAIL"
-        return build_response("📧 *Client* — Votre *email* ?")
+        return build_response("📧 *Client* — Votre *email* ?\nExemple : `nom.prenom@gmail.com`")
     if session["step"] == "SIGNUP_CLIENT_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_CLIENT_ADDRESS"
-        return build_response("📍 *Client* — Votre *adresse principale* ?")
+        return build_response("📍 *Client* — Votre *adresse principale* ?\nExemple : `25 Avenue de la Paix, Brazzaville`")
     if session["step"] == "SIGNUP_CLIENT_ADDRESS":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_CLIENT_PASSWORD"
-        return build_response("🔑 *Client* — Choisissez un *mot de passe*.")
+        return build_response(
+            "🔑 *Client* — Choisissez un *mot de passe*.\n"
+            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`\n"
+            "👉 Minimum 8 caractères, inclure majuscules, chiffres et symboles."
+        )
     if session["step"] == "SIGNUP_CLIENT_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
@@ -263,83 +267,79 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_LIVREUR_EMAIL"
-        return build_response("📧 *Livreur* — Votre *email* ?")
+        return build_response("📧 *Livreur* — Votre *email* ?\nExemple : `livreur.exemple@gmail.com`")
     if session["step"] == "SIGNUP_LIVREUR_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_LIVREUR_TYPE"
-        return build_response("🏷️ *Type livreur* ? (*independant*, *societe*, *autoentrepreneur*)")
+        return build_response("🏷️ *Type livreur* ?\nExemples : `independant`, `societe`, `autoentrepreneur`")
     if session["step"] == "SIGNUP_LIVREUR_TYPE":
         norm = _norm_type_livreur(t)
         if not norm:
             return build_response("Type invalide. Choisissez: *independant*, *societe*, *autoentrepreneur*.")
         session["signup"]["data"]["type_livreur"] = norm
         session["step"] = "SIGNUP_LIVREUR_VEHICULE"
-        return build_response("🛵 *Type de véhicule* ? (*moto*, *voiture*, *velo*, *camionnette*)")
+        return build_response("🛵 *Type de véhicule* ?\nExemples : `moto`, `voiture`, `velo`, `camionnette`")
     if session["step"] == "SIGNUP_LIVREUR_VEHICULE":
         norm = _norm_type_vehicule(t)
         if not norm:
             return build_response("Type véhicule invalide. Exemples: *moto*, *voiture*, *velo*, *camionnette*.")
         session["signup"]["data"]["type_vehicule"] = norm
         session["step"] = "SIGNUP_LIVREUR_PERMIS"
-        return build_response("🧾 *Numéro de permis* ?")
+        return build_response("🧾 *Numéro de permis* ?\nExemple : `BZV-123456-2025`")
     if session["step"] == "SIGNUP_LIVREUR_PERMIS":
         session["signup"]["data"]["numero_permis"] = t
         session["step"] = "SIGNUP_LIVREUR_ZONE"
-        return build_response("🗺️ *Zone d’activité* ? (ex: Brazzaville)")
+        return build_response("🗺️ *Zone d’activité* ?\nExemples : `Brazzaville Centre`, `Poto-Poto`, `Talangaï`")
     if session["step"] == "SIGNUP_LIVREUR_ZONE":
         session["signup"]["data"]["zone_activite"] = t
         session["step"] = "SIGNUP_LIVREUR_PASSWORD"
-        return build_response("🔑 *Livreur* — Choisissez un *mot de passe*.")
+        return build_response(
+            "🔑 *Livreur* — Choisissez un *mot de passe*.\n"
+            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`"
+        )
     if session["step"] == "SIGNUP_LIVREUR_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
 
-    # ----- Entreprise (ex Marchand) -----
-    # ----- Entreprise (ex Marchand) -----
+    # ----- Entreprise -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
         session["step"] = "SIGNUP_MARCHAND_TYPE"
-        return build_response("🏷️ *Type d’entreprise* ? (ex: restaurant)")
-
+        return build_response("🏷️ *Type d’entreprise* ?\nExemple : `Restaurant`, `Pharmacie`, `Boutique de vêtements`")
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
         session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower())
         session["step"] = "SIGNUP_MARCHAND_DESC"
-        return build_response("📝 *Description* ?")
-
+        return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`")
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
         session["step"] = "SIGNUP_MARCHAND_ADR"
-        return build_response("📍 *Adresse* de l’entreprise ?")
-
+        return build_response("📍 *Adresse* de l’entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`")
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
         resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise ou entrez-la manuellement.")
-        resp["ask_location"] = "📌 Merci de partager la *position exacte* de votre entreprise :"
+        resp["ask_location"] = "📌 Envoyez votre *position GPS* (exemple : Brazzaville Centre)."
         return resp
-
-    # Traitement réception localisation (Webhook envoie lat/lng)
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"
-        return build_response("⏰ *Horaires d’ouverture* ?")
-
+        return build_response("⏰ *Horaires d’ouverture* ?\nExemple : `Lun-Sam 08h-20h`")
     if session["step"] == "SIGNUP_MARCHAND_HOR":
         session["signup"]["data"]["horaires_ouverture"] = t
         session["step"] = "SIGNUP_MARCHAND_CONTACT"
-        return build_response("👤 *Prénom Nom* du responsable ?")
-
+        return build_response("👤 *Prénom Nom* du responsable ?\nExemple : `Pierre Mabiala`")
     if session["step"] == "SIGNUP_MARCHAND_CONTACT":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_MARCHAND_EMAIL"
-        return build_response("📧 *Email* du responsable ?")
-
+        return build_response("📧 *Email* du responsable ?\nExemple : `responsable@entreprise.com`")
     if session["step"] == "SIGNUP_MARCHAND_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_MARCHAND_PASSWORD"
-        return build_response("🔑 *Entreprise* — Choisissez un *mot de passe*.")
-
+        return build_response(
+            "🔑 *Entreprise* — Choisissez un *mot de passe*.\n"
+            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`"
+        )
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
