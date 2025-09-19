@@ -135,62 +135,52 @@ def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "FOLLOW_WAIT"
     return build_response("🔎 Entrez la *référence* de votre demande (ex: COUR-20250919-001).")
 
-def follow_lookup(session: Dict[str, Any], ref_input: str) -> Dict[str, Any]:
-    """
-    ⚠️ L'API n'accepte que l'ID en /{id}/.
-    → Stratégie: on liste les missions du client via GET /api/v1/coursier/missions/
-      puis on retrouve localement celle dont numero_mission == ref_input.
-      Ensuite, on appelle /{id}/ pour le détail.
-    """
+def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
-        user = session.get("user") or {}
-        if not user.get("id"):
+        # Vérifier si connecté
+        user_id = (session.get("user") or {}).get("id")
+        if not user_id:
             return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
 
-        # 1) Lister les missions de CE client
+        # Récupérer toutes les missions du client
         r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
-        missions = _extract_results(r.json())
+        all_missions = r.json() or []
 
-        # 2) Retrouver par référence (case-sensitive côté API le plus souvent)
-        ref = (ref_input or "").strip()
-        mission = next((m for m in missions if (m.get("numero_mission") or "").strip() == ref), None)
+        # Chercher par référence (numero_mission)
+        mission = next((m for m in all_missions if m.get("numero_mission") == text.strip()), None)
         if not mission:
-            session["step"] = "MENU"
-            return build_response("❌ Demande introuvable. Vérifiez la *référence* saisie.", MAIN_MENU_BTNS)
+            return build_response(f"❌ Aucune demande trouvée avec la référence *{text}*.", MAIN_MENU_BTNS)
 
+        # Charger le détail avec l'id
         mission_id = mission.get("id")
-        if not mission_id:
-            session["step"] = "MENU"
-            return build_response("❌ Référence invalide.", MAIN_MENU_BTNS)
+        r2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
+        r2.raise_for_status()
+        d = r2.json()
 
-        # 3) Détail par ID
-        r = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
-        r.raise_for_status()
-        d = r.json()
-
-        # 4) Récap UX (2 étapes)
+        # Étape 1 : infos générales
         recap = (
-            f"📦 Demande *{d.get('numero_mission','-')}* — *{d.get('statut','-')}*\n"
-            f"🚏 *Départ* : {d.get('adresse_recuperation','-')}\n"
-            f"📍 *Arrivée* : {d.get('adresse_livraison','-')}\n"
-            f"💰 *Valeur* : {d.get('valeur_produit','-')} FCFA\n"
+            f"📦 Demande {d.get('numero_mission','-')} — {d.get('statut','-')}\n"
+            f"🚏 Départ : {d.get('adresse_recuperation','-')}\n"
+            f"📍 Arrivée : {d.get('adresse_livraison','-')}\n"
+            f"💰 Valeur : {d.get('valeur_produit','-')} FCFA\n"
         )
 
+        # Étape 2 : détails si mission assignée
         if d.get("statut") in {"assigned", "en_route", "completed"}:
-            recap += f"\n📅 *Créée le* : {format_date(d.get('created_at','-'))}\n"
+            recap += (
+                f"\n🔖 Réf interne : {d.get('id')}\n"
+                f"📅 Créée le : {d.get('created_at','-')}\n"
+            )
             if d.get("livreur_nom"):
-                recap += f"🚴 *Livreur* : {d['livreur_nom']} ({d.get('livreur_telephone','-')})\n"
+                recap += f"🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})\n"
             if d.get("distance_estimee"):
-                recap += f"📏 *Distance estimée* : {d['distance_estimee']}\n"
+                recap += f"📏 Distance estimée : {d['distance_estimee']}\n"
 
-        session["step"] = "MENU"
-        # UX: proposer CTA utiles
-        return build_response(recap.strip(), ["Nouvelle demande", "Suivre ma demande", "Marketplace"])
+        return build_response(recap.strip(), MAIN_MENU_BTNS)
 
     except Exception as e:
         logger.error(f"[FOLLOW] {e}")
-        session["step"] = "MENU"
         return build_response("❌ Erreur lors du suivi.", MAIN_MENU_BTNS)
 
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
