@@ -21,7 +21,7 @@ WELCOME_TEXT = (
 )
 WELCOME_BTNS = ["Connexion", "Inscription"]
 
-MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma livraison", "Marketplace"]
+MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 GREETINGS = {"bonjour","salut","bjr","hello","bonsoir","hi","menu","accueil"}
 
 # ------------------------------------------------------
@@ -118,23 +118,32 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
         r = api_request(session, "GET", f"/api/v1/coursier/missions/{text}/")
         if r.status_code == 404:
-            return build_response("❌ Livraison introuvable.", MAIN_MENU_BTNS)
+            return build_response("❌ Demande introuvable.", MAIN_MENU_BTNS)
         r.raise_for_status()
         d = r.json()
 
+        # Étape 1 : infos générales
         recap = (
             f"📦 Mission #{d.get('id')} — {d.get('statut','-')}\n"
             f"🚏 Départ : {d.get('adresse_recuperation','-')}\n"
             f"📍 Arrivée : {d.get('adresse_livraison','-')}\n"
-            f"👤 Client : {d.get('nom_client_final','-')} ({d.get('telephone_client_final','-')})\n"
             f"💰 Valeur : {d.get('valeur_produit','-')} FCFA\n"
         )
 
-        # Ajouter infos livreur si dispo
-        if d.get("livreur_nom"):
-            recap += f"\n🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})"
+        # Étape 2 : détails si mission assignée
+        if d.get("statut") in {"assigned", "en_route", "completed"}:
+            recap += (
+                f"\n🔖 Réf : {d.get('numero_mission','-')}\n"
+                f"📅 Créée le : {d.get('created_at','-')}\n"
+            )
+            if d.get("livreur_nom"):
+                recap += (
+                    f"🚴 Livreur : {d['livreur_nom']} ({d['livreur_telephone']})\n"
+                )
+            if d.get("distance_estimee"):
+                recap += f"📏 Distance estimée : {d['distance_estimee']}\n"
 
-        return build_response(recap, MAIN_MENU_BTNS)
+        return build_response(recap.strip(), MAIN_MENU_BTNS)
 
     except Exception as e:
         logger.error(f"[FOLLOW] {e}")
@@ -350,8 +359,9 @@ def handle_message(
         resp["ask_location"] = "📍 Merci de partager votre localisation." # message par défaut
         return resp
 
-    if t in {"2","suivre","suivre ma livraison"}:
+    if t in {"2","suivre","suivre ma demande"}:
         return handle_follow(session)
+
 
     if t in {"3","historique"}:
         return handle_history(session)
@@ -430,6 +440,10 @@ def handle_message(
             session["step"] = "COURIER_DESC"
             return build_response("📦 Entrez la *nouvelle description* du colis.")
         return build_response("👉 Choisissez *Départ*, *Destination*, *Valeur* ou *Description*.", ["Départ","Destination","Valeur","Description"])
+
+        # --- Suivi livraison ---
+    if session.get("step") == "FOLLOW_WAIT":
+        return follow_lookup(session, text)
 
     # --- Marketplace flow ---
     # --- Marketplace flow ---
