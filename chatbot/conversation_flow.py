@@ -137,21 +137,23 @@ def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
 
 def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
-        # Vérifier qu'on a bien un token
         if not (session.get("auth") or {}).get("access"):
             return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
 
-        # Charger toutes les missions du client via son token
+        # Charger les missions du client (réponse paginée)
         r = api_request(session, "GET", "/api/v1/coursier/missions/")
         r.raise_for_status()
-        all_missions = r.json() or []
+        data = r.json() or {}
+
+        all_missions = data.get("results", [])
 
         # Chercher la mission par référence (numero_mission)
-        mission = next((m for m in all_missions if m.get("numero_mission") == text.strip()), None)
+        ref = text.strip()
+        mission = next((m for m in all_missions if str(m.get("numero_mission")) == ref), None)
         if not mission:
-            return build_response(f"❌ Aucune demande trouvée avec la référence *{text}*.", MAIN_MENU_BTNS)
+            return build_response(f"❌ Aucune demande trouvée avec la référence *{ref}*.", MAIN_MENU_BTNS)
 
-        # Récupérer détail complet avec l'id
+        # Charger détail complet avec l'id
         mission_id = mission.get("id")
         r2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
         r2.raise_for_status()

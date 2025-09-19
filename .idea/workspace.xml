@@ -127,7 +127,7 @@
       <workItem from="1757798563007" duration="19404000" />
       <workItem from="1758095646177" duration="4623000" />
       <workItem from="1758114701559" duration="10473000" />
-      <workItem from="1758269070529" duration="5097000" />
+      <workItem from="1758269070529" duration="6074000" />
     </task>
     <servers />
   </component>
@@ -141,11 +141,6 @@
           <url>file://$PROJECT_DIR$/manage.py</url>
           <line>2</line>
           <option name="timeStamp" value="2" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/chatbot/conversation_flow.py</url>
-          <line>137</line>
-          <option name="timeStamp" value="3" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
