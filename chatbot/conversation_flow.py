@@ -88,7 +88,7 @@ def ai_fallback(user_message: str, phone: str) -> Dict[str, Any]:
         )
 
 # ------------------------------------------------------
-# Création demande
+# Création demande (Coursier)
 # ------------------------------------------------------
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
     d = session.setdefault("new_request", {})
@@ -159,7 +159,6 @@ def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"[FOLLOW_LIST] {e}")
         return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
 
-
 def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     try:
         if not (session.get("auth") or {}).get("access"):
@@ -221,7 +220,6 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
         logger.error(f"[FOLLOW_LOOKUP] {e}")
         return build_response("❌ Erreur lors du suivi de la demande.", MAIN_MENU_BTNS)
 
-
 def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
     try:
         r = api_request(session, "GET", "/api/v1/coursier/missions/")
@@ -254,108 +252,83 @@ def handle_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
         data = r.json()
     except Exception:
         data = []
-
     categories = data.get("results", []) if isinstance(data, dict) else data
     if not categories:
         return build_response("❌ Aucune catégorie disponible pour le moment.", ["Menu"])
-
     session["market_categories"] = {str(i+1): c for i, c in enumerate(categories)}
-    lignes = [f"{i+1}. {c.get('nom','—')}" for i, c in enumerate(categories)]
-    return build_response(
-        "🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
-        list(session["market_categories"].keys())
-    )
+    lignes = [f"{i+1}. {c.get('nom','—')}" for i,c in enumerate(categories)]
+    return build_response("🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
+                          list(session["market_categories"].keys()))
 
 def handle_marketplace_category(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    t = text.lower().strip()
-    mapping = {"restauration": "Restauration", "mode": "Mode", "pharmacie": "Pharmacie"}
-    if t not in mapping:
-        return build_response("⚠️ Catégorie invalide. Choisissez :", list(mapping.values()))
-
-    cat = mapping[t]
+    cats = session.get("market_categories", {})
+    if text not in cats:
+        return build_response("⚠️ Choisissez un numéro valide.", list(cats.keys()))
+    cat = cats[text]
     session["market_category"] = cat
     session["step"] = "MARKET_MERCHANT"
-
-    r = api_request(session, "GET", f"/api/v1/marketplace/merchants/?categorie={quote_plus(cat)}")
+    r = api_request(session, "GET", f"/api/v1/marketplace/merchants/?categorie={quote_plus(str(cat.get('id')))}")
     try:
         data = r.json()
     except Exception:
         data = []
-
     merchants = data.get("results", []) if isinstance(data, dict) else data
     if not merchants:
-        return build_response(f"❌ Aucun marchand trouvé dans la catégorie *{cat}*.", ["Menu"])
-
+        return build_response(f"❌ Aucun marchand trouvé dans la catégorie *{cat.get('nom','—')}*.", ["Menu"])
     merchants = merchants[:5]
-    session["market_merchants"] = {str(i+1): m for i, m in enumerate(merchants)}
-
-    lignes = [f"{i+1}. {m.get('nom','—')}" for i, m in enumerate(merchants)]
-    return build_response(
-        f"🏬 Marchands disponibles en *{cat}* :\n" + "\n".join(lignes) + "\n\n👉 Tapez le numéro du marchand choisi."
-    )
+    session["market_merchants"] = {str(i+1): m for i,m in enumerate(merchants)}
+    lignes = [f"{i+1}. {m.get('nom','—')}" for i,m in enumerate(merchants)]
+    return build_response(f"🏬 Marchands disponibles en *{cat.get('nom','—')}* :\n" + "\n".join(lignes),
+                          list(session["market_merchants"].keys()))
 
 def handle_marketplace_merchant(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     merchants = session.get("market_merchants") or {}
     if text not in merchants:
         return build_response("⚠️ Choisissez un numéro valide de marchand.", list(merchants.keys()))
-
     merchant = merchants[text]
     session["market_merchant"] = merchant
     session["step"] = "MARKET_PRODUCTS"
-
     r = api_request(session, "GET", f"/api/v1/marketplace/produits/?merchant_id={merchant.get('id')}")
     try:
         data = r.json()
     except Exception:
         data = []
-
     produits = data.get("results", []) if isinstance(data, dict) else data
     if not produits:
         return build_response(f"❌ Aucun produit trouvé pour *{merchant.get('nom','—')}*.", ["Menu"])
-
     produits = produits[:5]
-    session["market_products"] = {str(i+1): p for i, p in enumerate(produits)}
-
+    session["market_products"] = {str(i+1): p for i,p in enumerate(produits)}
     lignes = []
-    for i, p in enumerate(produits, start=1):
-        nom = p.get("nom", "—")
-        prix = p.get("prix", "0")
+    for i,p in enumerate(produits, start=1):
+        nom = p.get("nom","—")
+        prix = p.get("prix","0")
         ligne = f"{i}. {nom} — {prix} FCFA"
         if p.get("photo_url"):
             ligne += f"\n🖼️ {p['photo_url']}"
         lignes.append(ligne)
-
-    return build_response(
-        f"📦 Produits de *{merchant.get('nom','—')}* :\n" + "\n".join(lignes) + "\n\n👉 Tapez le numéro du produit choisi."
-    )
+    return build_response(f"📦 Produits de *{merchant.get('nom','—')}* :\n" + "\n".join(lignes),
+                          list(session["market_products"].keys()))
 
 def handle_marketplace_product(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     produits = session.get("market_products") or {}
     if text not in produits:
         return build_response("⚠️ Choisissez un numéro valide de produit.", list(produits.keys()))
-
     produit = produits[text]
     session["new_request"] = {
         "market_choice": produit.get("nom"),
         "description": produit.get("description",""),
     }
     session["step"] = "MARKET_PAY"
-
     return build_response(
         f"📦 Vous avez choisi *{produit.get('nom')}* ({produit.get('prix')} FCFA).\n💳 Choisissez un mode de paiement :",
-        ["Espèces", "Mobile Money", "Virement"]
+        ["Espèces","Mobile Money","Virement"]
     )
 
-def handle_marketplace_desc(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    session["new_request"]["description"] = text
-    session["step"] = "MARKET_PAY"
-    return build_response("💳 Choisissez un mode de paiement :", ["Espèces", "Mobile Money", "Virement"])
-
 def handle_marketplace_pay(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    mapping = {"espèces": "cash", "mobile money": "mobile_money", "virement": "virement"}
+    mapping = {"espèces":"cash","mobile money":"mobile_money","virement":"virement"}
     t = text.lower().strip()
     if t not in mapping:
-        return build_response("Merci de choisir un mode valide.", ["Espèces", "Mobile Money", "Virement"])
+        return build_response("Merci de choisir un mode valide.", ["Espèces","Mobile Money","Virement"])
     session["new_request"]["payment_method"] = mapping[t]
     d = session["new_request"]
     session["step"] = "MARKET_CONFIRM"
@@ -366,7 +339,7 @@ def handle_marketplace_pay(session: Dict[str, Any], text: str) -> Dict[str, Any]
         f"• Paiement : {d.get('payment_method')}\n"
         "👉 Confirmez-vous la commande ?"
     )
-    return build_response(recap, ["Confirmer", "Annuler", "Modifier"])
+    return build_response(recap, ["Confirmer","Annuler","Modifier"])
 
 def handle_marketplace_confirm(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     t = text.lower()
@@ -381,27 +354,13 @@ def handle_marketplace_confirm(session: Dict[str, Any], text: str) -> Dict[str, 
         return build_response("✏️ Que souhaitez-vous modifier ?", ["Produit","Description","Paiement"])
     return build_response("👉 Répondez par Confirmer, Annuler ou Modifier.", ["Confirmer","Annuler","Modifier"])
 
-def handle_marketplace_edit(session: Dict[str, Any], text: str) -> Dict[str, Any]:
-    t = text.lower()
-    if t == "produit":
-        session["step"] = "MARKET_SEARCH"; return build_response("🛍️ Quel *nouveau* produit recherchez-vous ?")
-    if t == "description":
-        session["step"] = "MARKET_DESC";   return build_response("📦 Entrez la nouvelle description du produit.")
-    if t == "paiement":
-        session["step"] = "MARKET_PAY";    return build_response("💳 Choisissez un nouveau mode de paiement.", ["Espèces","Mobile Money","Virement"])
-    return build_response("👉 Choisissez Produit, Description ou Paiement.", ["Produit","Description","Paiement"])
-
 # ------------------------------------------------------
 # Router principal
 # ------------------------------------------------------
-def handle_message(
-    phone: str,
-    text: str,
-    *,
-    lat: Optional[float] = None,
-    lng: Optional[float] = None,
-    **_,
-) -> Dict[str, Any]:
+def handle_message(phone: str, text: str,
+                   *, lat: Optional[float]=None,
+                   lng: Optional[float]=None,
+                   **_) -> Dict[str, Any]:
     session = get_session(phone)
     t = normalize(text).lower()
 
@@ -411,31 +370,34 @@ def handle_message(
 
     if t in GREETINGS:
         session["step"] = "MENU"
-        return build_response(
-            "👉 Choisissez une option :\n"
-            "- *1* Nouvelle demande\n"
-            "- *2* Suivre ma demande\n"
-            "- *3* Historique\n"
-            "- *4* Marketplace",
-            MAIN_MENU_BTNS
-        )
+        return build_response("👉 Choisissez une option :", MAIN_MENU_BTNS)
 
+    # Menu principal
     if t in {"1","nouvelle demande"}:
         session["step"] = "COURIER_DEPART"
         resp = build_response("📍 Indiquez votre adresse de départ ou partagez votre localisation.")
         resp["ask_location"] = "📍 Merci de partager votre position."
         return resp
-
     if t in {"2","suivre","suivre ma demande"}:
         return handle_follow(session)
-
     if t in {"3","historique"}:
         return handle_history(session)
-
-    if t in {"4","marketplace"}:
+    if t in {"4","marketplace","market"}:
         return handle_marketplace(session)
 
-    # Localisation
+    # --- Flow Marketplace ---
+    if session.get("step") == "MARKET_CATEGORY":
+        return handle_marketplace_category(session, t)
+    if session.get("step") == "MARKET_MERCHANT":
+        return handle_marketplace_merchant(session, t)
+    if session.get("step") == "MARKET_PRODUCTS":
+        return handle_marketplace_product(session, t)
+    if session.get("step") == "MARKET_PAY":
+        return handle_marketplace_pay(session, t)
+    if session.get("step") == "MARKET_CONFIRM":
+        return handle_marketplace_confirm(session, t)
+
+    # --- Flow Coursier ---
     if lat is not None and lng is not None and session.get("step") == "COURIER_DEPART":
         nr = session.setdefault("new_request", {})
         nr["depart"] = f"{lat},{lng}"
@@ -443,7 +405,6 @@ def handle_message(
         session["step"] = "COURIER_DEST"
         return build_response("✅ Localisation enregistrée.\n📍 Quelle est l’adresse de destination ?")
 
-    # Wizard
     if session.get("step") == "COURIER_DEPART":
         session.setdefault("new_request", {})["depart"] = text
         session["step"] = "COURIER_DEST"
@@ -477,9 +438,7 @@ def handle_message(
         session["new_request"]["description"] = text
         d = session["new_request"]
         session["step"] = "COURIER_CONFIRM"
-
         depart_aff = "Position actuelle" if d.get("coordonnees_gps") else d.get("depart")
-
         recap = (
             "📝 Récapitulatif de votre demande :\n"
             f"• Départ : {depart_aff}\n"
@@ -521,16 +480,10 @@ def handle_message(
         if t == "description":
             session["step"] = "COURIER_DESC"
             return build_response("📦 Entrez la nouvelle description du colis.")
-        return build_response("👉 Choisissez Départ, Destination, Valeur, Description ou Destinataire.", ["Départ","Destination","Valeur","Description","Destinataire"])
+        return build_response("👉 Choisissez Départ, Destination, Valeur, Description ou Destinataire.",
+                              ["Départ","Destination","Valeur","Description","Destinataire"])
 
     if session.get("step") == "FOLLOW_WAIT":
         return follow_lookup(session, text)
-
-    if session.get("step") == "MARKET_CATEGORY":
-        return handle_marketplace_category(session, text)
-    if session.get("step") == "MARKET_MERCHANT":
-        return handle_marketplace_merchant(session, text)
-    if session.get("step") == "MARKET_PRODUCTS":
-        return handle_marketplace_product(session, text)
 
     return ai_fallback(text, phone)
