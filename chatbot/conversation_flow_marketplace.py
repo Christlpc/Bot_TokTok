@@ -45,7 +45,8 @@ def handle_message(phone: str, text: str, lat: Optional[float] = None, lng: Opti
 
         # On peut considérer que chaque “entreprise” a une catégorie ou nom
         session["market_merchants"] = {str(i+1): ent for i, ent in enumerate(entreprises)}
-        lignes = [f"{i+1}. {ent.get('nom','—')}" for i, ent in enumerate(entreprises)]
+        lignes = [f"{i + 1}. {ent.get('nom_entreprise') or ent.get('raison_sociale') or ent.get('nom') or '—'}"
+                  for i, ent in enumerate(entreprises)]
         return build_response("🏬 Marchands disponibles :\n" + "\n".join(lignes),
                               list(session["market_merchants"].keys()))
 
