@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional
 from .auth_core import get_session, build_response, normalize
-from .conversation_flow import ai_fallback  # ou autre import si tu as changé
+from .conversation_flow import ai_fallback  # si tu as cette fonction dans conversation_flow
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     headers = {**_headers(session), **kwargs.pop("headers", {})}
     url = f"{API_BASE}{path}"
     r = requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
-    logger.debug(f"[API-C] {method} {path} → {r.status_code}")
+    logger.debug(f"[API-C] {method} {path} -> {r.status_code}")
     return r
 
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,6 +58,13 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
 def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
+
+    # Cas d’entrée depuis le menu : si utilisateur tape “nouvelle demande”
+    if step in {None, "MENU", "AUTHENTICATED"} and t in {"nouvelle demande", "1"}:
+        session["step"] = "COURIER_DEPART"
+        resp = build_response("📍 Indiquez votre adresse de départ ou partagez votre localisation.")
+        resp["ask_location"] = True
+        return resp
 
     # localisation pour départ
     if lat is not None and lng is not None and step == "COURIER_DEPART":
