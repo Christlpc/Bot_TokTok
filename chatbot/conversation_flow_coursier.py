@@ -2,20 +2,13 @@
 from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional
-from urllib.parse import quote_plus
-from datetime import datetime
-from openai import OpenAI
 from .auth_core import get_session, build_response, normalize
-from .conversation_flow import ai_fallback
+from .conversation_flow import ai_fallback  # ou autre import si tu as changé
 
 logger = logging.getLogger(__name__)
 
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
-TIMEOUT  = int(os.getenv("TOKTOK_TIMEOUT", "15"))
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-openai_client  = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 
@@ -27,7 +20,7 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     headers = {**_headers(session), **kwargs.pop("headers", {})}
     url = f"{API_BASE}{path}"
     r = requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
-    logger.debug(f"[API-C] {method} {path} -> {r.status_code}")
+    logger.debug(f"[API-C] {method} {path} → {r.status_code}")
     return r
 
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -59,10 +52,10 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         )
         return build_response(msg, MAIN_MENU_BTNS)
     except Exception as e:
-        logger.error(f"[COURIER] create error: {e}")
+        logger.error(f"[COURIER create error] {e}")
         return build_response("❌ Une erreur est survenue lors de la création de la demande.", MAIN_MENU_BTNS)
 
-def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float]=None, lng: Optional[float]=None) -> Dict[str, Any]:
+def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
 
@@ -126,6 +119,13 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             session["step"] = "MENU"
             session.pop("new_request", None)
             return build_response("✅ Demande annulée.", MAIN_MENU_BTNS)
+        if t in {"modifier"}:
+            session["step"] = "COURIER_EDIT"
+            return build_response("✏️ Que souhaitez-vous modifier ?", ["Départ", "Destination", "Valeur", "Description", "Destinataire"])
 
-    # si pas match, revenir au fallback
+    # fallback
     return ai_fallback(text, session.get("phone"))
+
+def handle_message(phone: str, text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
+    session = get_session(phone)
+    return flow_coursier_handle(session, text, lat=lat, lng=lng)
