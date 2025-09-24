@@ -258,7 +258,7 @@ def handle_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
     if not categories:
         return build_response("❌ Aucune catégorie disponible pour le moment.", ["Menu"])
     session["market_categories"] = {str(i+1): c for i,c in enumerate(categories)}
-    lignes = [f"{i+1}. {c.get('nom','—')}" for i,c in enumerate(categories)}
+    lignes = [f"{i + 1}. {c.get('nom', '—')}" for i, c in enumerate(categories)]
     return build_response("🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
                           list(session["market_categories"].keys()))
 
