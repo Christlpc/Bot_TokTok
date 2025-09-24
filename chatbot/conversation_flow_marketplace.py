@@ -65,7 +65,7 @@ def handle_message(phone: str, text: str, lat: Optional[float] = None, lng: Opti
         # ou by_category si tu veux filtrer par catégorie
         merchant_id = m.get("id")
         # essayer avec l’endpoint “disponibles”
-        path = f"/api/v1/marketplace/produits/disponibles/?merchant_id={merchant_id}"
+        path = f"/api/v1/marketplace/produits/disponibles/disponibles/"
         r = api_request(session, "GET", path)
         if r.status_code != 200:
             logger.error(f"[MARKET produits dispo API] status={r.status_code}, body={r.text}")
