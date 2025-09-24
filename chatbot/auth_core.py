@@ -140,8 +140,8 @@ def route_to_role_menu(session: Dict[str, Any], role: str, intro_text: str) -> D
         )
     # client par défaut
     return build_response(
-        intro_text + "\n- *Nouvelle demande*\n- *Suivre ma livraison*\n- *Marketplace*",
-        ["Nouvelle demande", "Suivre ma livraison", "Marketplace"]
+        intro_text + "\n- *Nouvelle demande*\n- *Suivre ma demande*\n- *Marketplace*",
+        ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
     )
 
 # ---------- Login commun ----------

@@ -108,7 +108,7 @@ def create_start(session: Dict[str, Any]) -> Dict[str, Any]:
     session.setdefault("ctx", {})["new_product"] = {
         "nom": None,
         "prix": None,
-        "categorie": None,
+        "categorie_id": None,
         "stock": None,
         "description": None,
         "image_url": None,
@@ -131,10 +131,27 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
             return build_response("⚠️ Entrez un nombre. Ex: 4500")
         np["prix"] = int(amount)
         session["step"] = "PROD_CATEGORY"
-        return build_response("🏷️ *Catégorie* ? (ex: Restauration, Électro…)")
+        # Charger catégories
+        r = api_request(session, "GET", "/api/v1/marketplace/categories/")
+        cats = []
+        try:
+            data = r.json()
+            cats = data.get("results", []) if isinstance(data, dict) else data
+        except Exception:
+            cats = []
+        if not cats:
+            return build_response("❌ Aucune catégorie disponible pour le moment.", ["Annuler","Menu"])
+        session["ctx"]["categories"] = {str(i+1): c for i, c in enumerate(cats)}
+        session["step"] = "PROD_CATEGORY_CHOICE"
+        lignes = [f"{i+1}. {c.get('nom','—')}" for i,c in enumerate(cats)]
+        return build_response("🏷️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
+                              list(session["ctx"]["categories"].keys()))
 
-    if step == "PROD_CATEGORY":
-        np["categorie"] = t
+    if step == "PROD_CATEGORY_CHOICE":
+        cats = session["ctx"].get("categories", {})
+        if t not in cats:
+            return build_response("⚠️ Choisissez un numéro valide.", list(cats.keys()))
+        np["categorie_id"] = cats[t]["id"]
         session["step"] = "PROD_STOCK"
         return build_response("📦 *Stock* initial ? (ex: 10)")
 
@@ -154,13 +171,11 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
     if step == "PROD_IMAGE":
         if media_url and media_url.startswith("http"):
             np["image_url"] = media_url
-        # recap
         session["step"] = "PROD_CONFIRM"
         recap = (
             "🧾 *Récap produit* :\n"
             f"• Nom: {np['nom']}\n"
             f"• Prix: {np['prix']} XAF\n"
-            f"• Catégorie: {np['categorie']}\n"
             f"• Stock: {np['stock']}\n"
             f"• Desc: {np['description']}\n"
             f"• Image: {'Oui' if np['image_url'] else 'Non'}\n\n"
@@ -181,28 +196,22 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
             return build_response("❌ Création annulée.", MAIN_BTNS)
         return build_response("👉 Répondez par *Publier*, *Modifier* ou *Annuler*.", ["Publier","Modifier","Annuler"])
 
-    # fallback
     return build_response("Tapez *Publier* pour créer, ou *Modifier* pour reprendre.")
 
 def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
     np = session["ctx"]["new_product"]
 
-    # Vérifie l’entreprise connectée
     eid = session.get("user", {}).get("id") or _ensure_entreprise_id(session)
     if not eid:
         return build_response("❌ Impossible de retrouver votre entreprise. Reconnectez-vous.", MAIN_BTNS)
 
-    # ⚠️ Ici il faut mapper la catégorie : soit via un lookup API, soit un ID fixe
-    categorie_id = np.get("categorie")
-    # Si l’API attend un ID, il faudra ajouter une étape avant (ex: choix dans liste des catégories)
-
     payload = {
         "nom": np["nom"],
         "prix": np["prix"],
-        "categorie_id": categorie_id,  # 🔑 Utiliser _id au lieu de string
+        "categorie_id": np.get("categorie_id"),
         "stock": np["stock"],
         "description": np["description"],
-        "entreprise_id": eid,          # 🔑 Important !
+        "entreprise_id": eid,
         "actif": True,
     }
     if np.get("image_url"):
@@ -225,7 +234,6 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
         f"✅ Produit #{prod_id} *{prod_nom}* créé.",
         ["Mes produits", "Commandes", "Menu"]
     )
-
 
 # -----------------------------
 # Commandes
@@ -338,8 +346,7 @@ def handle_message(phone: str, text: str,
         session["step"] = "PROD_EDIT_FIELD"
         return build_response("✏️ Quel champ modifier ? (*prix*, *stock*, *nom*, *description*, *categorie*)")
 
-    if session.get("step") in {"PROD_NAME","PROD_PRICE","PROD_CATEGORY","PROD_STOCK","PROD_DESC","PROD_IMAGE","PROD_CONFIRM"}:
-        # Wizard création produit
+    if session.get("step") in {"PROD_NAME","PROD_PRICE","PROD_CATEGORY","PROD_CATEGORY_CHOICE","PROD_STOCK","PROD_DESC","PROD_IMAGE","PROD_CONFIRM"}:
         return handle_create_wizard(session, text, media_url)
 
     if session.get("step") == "PROD_EDIT_FIELD":
@@ -363,7 +370,7 @@ def handle_message(phone: str, text: str,
             if not num:
                 return build_response("⚠️ Entrez un nombre valide.")
             value = int(num)
-        fields = { "prix": "prix", "stock": "stock", "nom": "nom", "description": "description", "categorie": "categorie" }
+        fields = { "prix": "prix", "stock": "stock", "nom": "nom", "description": "description", "categorie": "categorie_id" }
         session["step"] = "ENTREPRISE_MENU"
         return product_patch(session, str(pid), {fields[field]: value})
 

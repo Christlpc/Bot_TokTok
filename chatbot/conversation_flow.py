@@ -249,8 +249,22 @@ def handle_history(session: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------
 def handle_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "MARKET_CATEGORY"
-    CATEGORIES = ["Restauration", "Mode", "Pharmacie"]
-    return build_response("🛍️ Choisissez une *catégorie* :", CATEGORIES)
+    r = api_request(session, "GET", "/api/v1/marketplace/categories/")
+    try:
+        data = r.json()
+    except Exception:
+        data = []
+
+    categories = data.get("results", []) if isinstance(data, dict) else data
+    if not categories:
+        return build_response("❌ Aucune catégorie disponible pour le moment.", ["Menu"])
+
+    session["market_categories"] = {str(i+1): c for i, c in enumerate(categories)}
+    lignes = [f"{i+1}. {c.get('nom','—')}" for i, c in enumerate(categories)]
+    return build_response(
+        "🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
+        list(session["market_categories"].keys())
+    )
 
 def handle_marketplace_category(session: Dict[str, Any], text: str) -> Dict[str, Any]:
     t = text.lower().strip()
