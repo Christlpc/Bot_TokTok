@@ -6,12 +6,12 @@ from .auth_core import get_session, ensure_auth_or_ask_password
 
 logger = logging.getLogger("toktok.router")
 
-# Map rôle -> chemin de module (avec fallback)
+# On ne l’utilise plus pour le “client” car on dispatchera manuellement selon le step
 FLOW_MAP: Dict[str, str] = {
-    "client":     "chatbot.conversation_flow",
-    "livreur":    "chatbot.livreur_flow",     # fichier livreur_flow.py
-    "entreprise": "chatbot.merchant_flow",    # alias "entreprise"
-    "marchand":   "chatbot.merchant_flow",    # compat
+    "livreur":    "chatbot.livreur_flow",
+    "entreprise": "chatbot.merchant_flow",
+    "marchand":   "chatbot.merchant_flow",
+    # “client” n’apparaît pas ici car on gère lui-même les deux flows dans “client”
 }
 
 
@@ -23,10 +23,9 @@ def _import_handle(module_path: str):
 def _call_with_supported_args(fn, *args, **kwargs):
     """
     Appelle fn en ne passant que les kwargs supportés par sa signature.
-    Évite TypeError: unexpected keyword argument 'lat'/'lng'.
+    Évite TypeError: unexpected keyword argument 'lat' / 'lng'.
     """
     sig = inspect.signature(fn)
-    # si **kwargs présent dans la signature -> on passe tout
     if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
         return fn(*args, **kwargs)
     allowed = {k: v for k, v in kwargs.items() if k in sig.parameters}
@@ -38,10 +37,6 @@ def _mask_phone(p: str, visible: int = 3) -> str:
     return p if len(p) <= visible * 2 else (p[:visible] + "****" + p[-visible:])
 
 def _log_event(stage: str, phone: str, meta: Dict[str, Any]) -> None:
-    """
-    stage ∈ {"incoming","auth_prompt","dispatch","flow_resp","error"}
-    meta peut contenir: msg_id, ts, type, role, step, text, buttons_count, flow, elapsed_ms
-    """
     safe = dict(meta or {})
     if "text" in safe:
         if safe.get("step") == "LOGIN_WAIT_PASSWORD":
@@ -58,17 +53,10 @@ def handle_incoming(
     lat: Optional[float] = None,
     lng: Optional[float] = None,
     media_url: Optional[str] = None,
-    # métadonnées WhatsApp optionnelles:
     wa_message_id: Optional[str] = None,
     wa_timestamp: Optional[int] = None,
     wa_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Point d’entrée unique :
-    1) Auth commune (Connexion / Inscription)
-    2) Dispatch vers le flow selon rôle
-    3) Logging détaillé
-    """
     t0 = time.time()
     session = get_session(phone)
 
@@ -80,7 +68,7 @@ def handle_incoming(
         "text": text,
     })
 
-    # 1) Auth commune (peut retourner un message si non connecté / wizard en cours)
+    # 1) Auth commune
     maybe = ensure_auth_or_ask_password(phone, text)
     if maybe is not None:
         _log_event("auth_prompt", phone, {
@@ -90,45 +78,78 @@ def handle_incoming(
         })
         return maybe
 
-    # 2) Utilisateur authentifié -> dispatch par rôle
+    # 2) On est authentifié — dispatch selon rôle ou selon step “marketplace” ou non
     role = (session.get("user") or {}).get("role") or "client"
-    module_path = FLOW_MAP.get(role) or FLOW_MAP["client"]
 
-    try:
+    # Si ce n'est pas “client”, on peut utiliser FLOW_MAP directement
+    if role != "client" and role in FLOW_MAP:
+        module_path = FLOW_MAP[role]
         handle_fn, mod = _import_handle(module_path)
-    except Exception as e:
-        logger.exception("flow_import_error", extra={"flow": module_path, "err": str(e)})
-        handle_fn, mod = _import_handle(FLOW_MAP["client"])
+        _log_event("dispatch", phone, {
+            "role": role,
+            "flow": getattr(mod, "__name__", module_path),
+            "step": session.get("step"),
+        })
+        try:
+            resp = _call_with_supported_args(
+                handle_fn,
+                phone,
+                text,
+                lat=lat,
+                lng=lng,
+                media_url=media_url,
+            )
+            _log_event("flow_resp", phone, {
+                "role": role,
+                "flow": getattr(mod, "__name__", module_path),
+                "resp_preview": str((resp or {}).get("response", ""))[:120],
+                "buttons_count": len((resp or {}).get("buttons", [])),
+                "elapsed_ms": int((time.time() - t0) * 1000),
+            })
+            return resp if isinstance(resp, dict) else {"response": "❌ Erreur interne.", "buttons": ["Menu"]}
+        except Exception as e:
+            _log_event("error", phone, {
+                "role": role,
+                "flow": getattr(mod, "__name__", module_path),
+                "err": str(e),
+            })
+            return {"response": "❌ Erreur interne.", "buttons": ["Menu"]}
 
+    # Si rôle = client, on décide manuellement entre coursier / marketplace
+    # Importer les deux handlers
+    from .conversation_flow_coursier import handle_message as handle_coursier
+    from .conversation_flow_marketplace import handle_message as handle_marketplace
+
+    # on log le dispatch
     _log_event("dispatch", phone, {
         "role": role,
-        "flow": getattr(mod, "__name__", module_path),
+        "flow": "client_flow_dispatch",
         "step": session.get("step"),
     })
 
-    try:
-        resp = _call_with_supported_args(
-            handle_fn,
-            phone,
-            text,
-            lat=lat,
-            lng=lng,
-            media_url=media_url,
-        )
+    # Conditions pour aller vers marketplace
+    tnorm = (text or "").lower().strip()
+    marketplace_steps = {
+        "MARKET_CATEGORY", "MARKET_MERCHANT", "MARKET_PRODUCTS",
+        "MARKETPLACE_LOCATION", "DEST_NOM", "DEST_TEL", "MARKET_PAY", "MARKET_CONFIRM", "MARKET_EDIT"
+    }
+
+    # Si l'utilisateur a tapé “marketplace” ou on est déjà dans un flow marketplace
+    if tnorm in {"marketplace", "4"} or session.get("step") in marketplace_steps:
+        # appeler le flow marketplace
+        resp = _call_with_supported_args(handle_marketplace, phone, text, lat=lat, lng=lng)
         _log_event("flow_resp", phone, {
             "role": role,
-            "flow": getattr(mod, "__name__", module_path),
-            "resp_preview": str((resp or {}).get("response", ""))[:120],
-            "buttons_count": len((resp or {}).get("buttons", [])),
-            "elapsed_ms": int((time.time() - t0) * 1000),
+            "flow": "marketplace",
+            "resp_preview": resp.get("response", "")
         })
-        # sécurité: toujours un dict minimal
-        return resp if isinstance(resp, dict) else {"response": "❌ Erreur interne.", "buttons": ["Menu"]}
+        return resp
 
-    except Exception as e:
-        _log_event("error", phone, {
-            "role": role,
-            "flow": getattr(mod, "__name__", module_path),
-            "err": str(e),
-        })
-        return {"response": "❌ Erreur interne.", "buttons": ["Menu"]}
+    # Sinon, on appelle le flow coursier
+    resp = _call_with_supported_args(handle_coursier, phone, text, lat=lat, lng=lng)
+    _log_event("flow_resp", phone, {
+        "role": role,
+        "flow": "coursier",
+        "resp_preview": resp.get("response", "")
+    })
+    return resp
