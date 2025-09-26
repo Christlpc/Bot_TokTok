@@ -306,19 +306,18 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         return resp
 
     # -------- DESTINATION (CLIENT) --------
-    if step == "MARKET_DESTINATION":
-        nr = session.setdefault("new_request", {})
+    # -------- LOCALISATION --------
+    if step == "MARKETPLACE_LOCATION":
         if lat is not None and lng is not None:
-            nr["destination"] = "Ma position"
-            # on NE PASSE PAS ces coords en 'coordonnees_gps' pour éviter le mélange (côté coursier = pickup)
-            # si l'API supporte coordonnees_livraison, on pourrait l'ajouter ici sous une autre clé,
-            # mais courier_create actuel ne l'envoie pas. On reste textuel.
+            session["new_request"]["depart"] = "Position actuelle"
+            session["new_request"]["coordonnees_gps"] = f"{lat},{lng}"
         elif text:
-            nr["destination"] = text
+            session["new_request"]["depart"] = text
+            session["new_request"]["coordonnees_gps"] = ""
         else:
-            return build_response("❌ Merci d’indiquer l’adresse de livraison (ou partagez la localisation).",
-                                  ["Annuler"])
+            return build_response("❌ Veuillez fournir votre localisation.", MAIN_MENU_BTNS)
 
+        # 🚀 au lieu de passer sur MARKET_DESTINATION -> on va direct sur MARKET_PAY
         session["step"] = "MARKET_PAY"
         return build_response("💳 Choisissez un mode de paiement :", ["Espèces", "Mobile Money", "Virement"])
 
