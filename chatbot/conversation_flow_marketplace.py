@@ -110,7 +110,7 @@ def _load_products_by_category(session: Dict[str, Any], category_id: Any) -> Lis
     """
     # 1) by_category
     try:
-        path = f"/api/v1/marketplace/produits/by_category/{category_id}/"
+        path = f"/api/v1/marketplace/produits//{category_id}/"
         r = api_request(session, "GET", path)
         if r.ok:
             data = r.json()
@@ -237,6 +237,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                               list(session["market_merchants"].keys()))
 
     # -------- MARCHANDS --------
+    # -------- MARCHANDS --------
     if step == "MARKET_MERCHANT":
         merchants = session.get("market_merchants", {})
         if t not in merchants:
@@ -245,39 +246,28 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session["market_merchant"] = merchant
         session["step"] = "MARKET_PRODUCTS"
 
-        cat_id = (session.get("market_category") or {}).get("id")
-        prods = _load_products_by_category(session, cat_id)
-        # filtrer par entreprise (id / pk / entreprise_id)
-        mid = merchant.get("id") or merchant.get("pk")
-        def _belongs(p: Dict[str, Any]) -> bool:
-            pe = p.get("entreprise")  # peut être dict
-            if isinstance(pe, dict):
-                pid = pe.get("id") or pe.get("pk")
-                return mid is not None and pid is not None and str(pid) == str(mid)
-            # sinon champ direct
-            return str(p.get("entreprise_id") or p.get("merchant_id") or "") == str(mid)
+        # récupérer tous les produits et filtrer par entreprise
+        r = api_request(session, "GET", "/api/v1/marketplace/produits/")
+        data = r.json() if r.status_code == 200 else []
+        produits = data.get("results", []) if isinstance(data, dict) else data
 
-        prods = [p for p in prods if _belongs(p)]
+        produits = [p for p in produits if p.get("entreprise_id") == merchant["id"]]
 
-        if not prods:
-            session["step"] = "MARKET_MERCHANT"
-            return build_response(f"❌ Aucun produit disponible chez *{_merchant_display_name(merchant)}*.",
-                                  list(merchants.keys()))
+        if not produits:
+            return build_response(f"❌ Aucun produit disponible chez *{merchant.get('nom_entreprise', '—')}*.",
+                                  MAIN_MENU_BTNS)
 
-        prods = prods[:5]
-        session["market_products"] = {str(i+1): p for i, p in enumerate(prods)}
-
+        produits = produits[:5]
+        session["market_products"] = {str(i + 1): p for i, p in enumerate(produits)}
         lignes = []
-        for i, p in enumerate(prods, start=1):
-            nom = p.get("nom") or p.get("name") or "—"
-            prix = p.get("prix") or p.get("price") or 0
+        for i, p in enumerate(produits, start=1):
+            nom = p.get("nom", "—")
+            prix = p.get("prix", "0")
             ligne = f"{i}. {nom} — {prix} FCFA"
             if p.get("photo_url"):
                 ligne += f"\n🖼️ {p['photo_url']}"
             lignes.append(ligne)
-
-        return build_response(f"📦 Produits de *{_merchant_display_name(merchant)}* :\n" + "\n".join(lignes) +
-                              "\n\n👉 Tapez le numéro du produit choisi.",
+        return build_response(f"📦 Produits de *{merchant.get('nom_entreprise', '—')}* :\n" + "\n".join(lignes),
                               list(session["market_products"].keys()))
 
     # -------- PRODUITS --------
