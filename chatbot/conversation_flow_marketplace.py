@@ -37,12 +37,44 @@ def marketplace_create_as_coursier(session: Dict[str, Any]) -> Dict[str, Any]:
     return courier_create(session)
 
 # ------------------------------------------------------
+# Start Marketplace
+# ------------------------------------------------------
+def start_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
+    # Récupération des entreprises (avec catégories)
+    r = api_request(session, "GET", "/api/v1/auth/entreprises/")
+    data = r.json() if r.status_code == 200 else []
+    entreprises = data.get("results", []) if isinstance(data, dict) else data
+
+    # Extraire catégories uniques
+    categories = {}
+    for e in entreprises:
+        cat_id = e.get("categorie_id")
+        cat_nom = e.get("categorie_nom", f"Catégorie {cat_id}")
+        if cat_id and cat_nom:
+            categories[str(cat_id)] = {"id": cat_id, "nom": cat_nom}
+
+    if not categories:
+        return build_response("❌ Aucune catégorie disponible pour le moment.", MAIN_MENU_BTNS)
+
+    # Mapper pour la session (1,2,3…)
+    cats_list = list(categories.values())
+    session["market_categories"] = {str(i+1): c for i, c in enumerate(cats_list)}
+    session["step"] = "MARKET_CATEGORY"
+
+    lignes = [f"{i+1}. {c['nom']}" for i, c in enumerate(cats_list)]
+    return build_response("🛍️ Choisissez une catégorie :", list(session["market_categories"].keys()))
+
+# ------------------------------------------------------
 # Flow Marketplace
 # ------------------------------------------------------
 def flow_marketplace_handle(session: Dict[str, Any], text: str,
                             lat: Optional[float]=None, lng: Optional[float]=None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
+
+    # -------- START --------
+    if t in {"marketplace"} and step in {"AUTHENTICATED", "MENU"}:
+        return start_marketplace(session)
 
     # -------- CATEGORIES --------
     if step == "MARKET_CATEGORY":
