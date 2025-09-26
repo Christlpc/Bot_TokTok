@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional
 from .auth_core import get_session, build_response, normalize
-from .conversation_flow import ai_fallback  # si tu as cette fonction dans conversation_flow
+from .conversation_flow import ai_fallback  # réutilise la fonction IA
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +26,22 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
     d = session.setdefault("new_request", {})
     try:
+        # Vérification minimum avant envoi
+        if not d.get("destination") and not d.get("coordonnees_livraison"):
+            session["step"] = "COURIER_DEST"
+            return build_response("📍 Merci d’indiquer une adresse ou partager la localisation de destination.")
+
         payload = {
             "entreprise_demandeur": (session.get("user") or {}).get("display_name") or "Client TokTok",
             "contact_entreprise": session.get("phone"),
-            "adresse_recuperation": d.get("depart"),
-            "coordonnees_recuperation": str(d.get("coordonnees_gps", "")),
-            "adresse_livraison": d.get("destination"),
-            "coordonnees_livraison": "",
-            "nom_client_final": d.get("destinataire_nom"),
-            "telephone_client_final": d.get("destinataire_tel"),
-            "description_produit": d.get("description"),
-            "valeur_produit": str(d.get("value_fcfa", 0)),
+            "adresse_recuperation": d.get("depart") or "",
+            "coordonnees_recuperation": d.get("coordonnees_gps", ""),
+            "adresse_livraison": d.get("destination") or "Position partagée",
+            "coordonnees_livraison": d.get("coordonnees_livraison", ""),
+            "nom_client_final": d.get("destinataire_nom") or "",
+            "telephone_client_final": d.get("destinataire_tel") or "",
+            "description_produit": d.get("description") or "",
+            "valeur_produit": str(d.get("value_fcfa") or 0),
             "type_paiement": d.get("payment_method", "entreprise_paie"),
         }
         r = api_request(session, "POST", "/api/v1/coursier/missions/", json=payload)
@@ -59,21 +64,30 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     step = session.get("step")
     t = normalize(text).lower() if text else ""
 
-    # Cas d’entrée depuis le menu : si utilisateur tape “nouvelle demande”
+    # Début du flow
     if step in {None, "MENU", "AUTHENTICATED"} and t in {"nouvelle demande", "1"}:
         session["step"] = "COURIER_DEPART"
         resp = build_response("📍 Indiquez votre adresse de départ ou partagez votre localisation.")
         resp["ask_location"] = True
         return resp
 
-    # localisation pour départ
-    if lat is not None and lng is not None and step == "COURIER_DEPART":
-        nr = session.setdefault("new_request", {})
-        nr["depart"] = "Position actuelle"
-        nr["coordonnees_gps"] = f"{lat},{lng}"
-        session["step"] = "COURIER_DEST"
-        return build_response("✅ Localisation enregistrée.\n📍 Quelle est l’adresse de destination ?")
+    # Localisation partagée
+    if lat is not None and lng is not None:
+        if step == "COURIER_DEPART":
+            nr = session.setdefault("new_request", {})
+            nr["depart"] = "Position actuelle"
+            nr["coordonnees_gps"] = f"{lat},{lng}"
+            session["step"] = "COURIER_DEST"
+            return build_response("✅ Localisation départ enregistrée.\n📍 Quelle est l’adresse de destination ?")
 
+        if step == "COURIER_DEST":
+            nr = session.setdefault("new_request", {})
+            nr["destination"] = "Position partagée"
+            nr["coordonnees_livraison"] = f"{lat},{lng}"
+            session["step"] = "DEST_NOM"
+            return build_response("✅ Destination enregistrée.\n👤 Quel est le *nom du destinataire* ?")
+
+    # Étapes classiques
     if step == "COURIER_DEPART":
         session.setdefault("new_request", {})["depart"] = text
         session["step"] = "COURIER_DEST"
@@ -107,11 +121,11 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         session["new_request"]["description"] = text
         session["step"] = "COURIER_CONFIRM"
         d = session["new_request"]
-        depart_aff = d.get("depart")
+        dest_aff = "Position partagée" if d.get("coordonnees_livraison") else d.get("destination")
         recap = (
             "📝 Récapitulatif de votre demande :\n"
-            f"• Départ : {depart_aff}\n"
-            f"• Destination : {d.get('destination')}\n"
+            f"• Départ : {d.get('depart')}\n"
+            f"• Destination : {dest_aff}\n"
             f"• Destinataire : {d.get('destinataire_nom')} ({d.get('destinataire_tel')})\n"
             f"• Valeur : {d.get('value_fcfa')} FCFA\n"
             f"• Description : {d.get('description')}\n\n"
@@ -130,7 +144,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             session["step"] = "COURIER_EDIT"
             return build_response("✏️ Que souhaitez-vous modifier ?", ["Départ", "Destination", "Valeur", "Description", "Destinataire"])
 
-    # fallback
+    # fallback IA
     return ai_fallback(text, session.get("phone"))
 
 def handle_message(phone: str, text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
