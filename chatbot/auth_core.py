@@ -13,7 +13,7 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # ---------- UI ----------
 WELCOME_TEXT = (
-    "🚚 Bienvenue sur *TokTok* !\n"
+    "🚚 Bienvenue sur *TokTok Delivery*, votre plateforme de Livraison interactive !\n"
     "Choisissez *Connexion* ou *Inscription*."
 )
 WELCOME_BTNS = ["Connexion", "Inscription", "Aide"]

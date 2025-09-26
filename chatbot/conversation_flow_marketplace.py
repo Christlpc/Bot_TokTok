@@ -388,11 +388,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         recap = (
             "📝 Récapitulatif de votre commande Marketplace :\n"
-            f"• Marchand : {_merchant_display_name(merchant)}\n"
-            f"• Retrait (pickup) : {pickup_addr}\n"
-            f"• Livraison (vous) : {d.get('depart', '—')}\n"
-            f"• Produit : {d.get('market_choice', '—')} — {d.get('value_fcfa', 0)} FCFA\n"
-            f"• Paiement : {d.get('payment_method', '—')}\n\n"
+            f"• *Marchand* : {_merchant_display_name(merchant)}\n"
+            f"• *Retrait*  : {pickup_addr}\n"
+            f"• *Adresse de Livraison* : {d.get('depart', '—')}\n"
+            f"• *Produit* : {d.get('market_choice', '—')} — {d.get('value_fcfa', 0)} FCFA\n"
+            f"• *Paiement* : {d.get('payment_method', '—')}\n\n"
             "👉 Confirmez-vous la commande ?"
         )
         return build_response(recap, ["Confirmer", "Annuler", "Modifier"])
@@ -431,12 +431,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             pickup_addr, _ = _merchant_pickup_info(merchant)
 
             recap = (
-                "📝 Récapitulatif de votre commande Marketplace :\n"
-                f"• Marchand : {_merchant_display_name(merchant)}\n"
-                f"• Retrait (pickup) : {pickup_addr}\n"
-                f"• Livraison (vous) : {d.get('depart', '—')}\n"
-                f"• Produit : {d.get('market_choice', '—')} — {d.get('value_fcfa', 0)} FCFA\n"
-                f"• Paiement : {d.get('payment_method', '—')}\n\n"
+                "📝 *Récapitulatif de votre commande Marketplace* :\n"
+                f"• *Marchand* : {_merchant_display_name(merchant)}\n"
+                f"• *Retrait*:{pickup_addr}\n"
+                f"•*Adresse de livraison*  {d.get('depart', '—')}\n"
+                f"•*Produit*: {d.get('market_choice', '—')} — {d.get('value_fcfa', 0)} FCFA\n"
+                f"•*Paiement*: {d.get('payment_method', '—')}\n\n"
                 "👉 Confirmez-vous la commande ?"
             )
             return build_response(recap, ["Confirmer", "Annuler", "Modifier"])

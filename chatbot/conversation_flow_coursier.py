@@ -67,7 +67,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     # Début du flow
     if step in {None, "MENU", "AUTHENTICATED"} and t in {"nouvelle demande", "1"}:
         session["step"] = "COURIER_DEPART"
-        resp = build_response("📍 Indiquez votre adresse de départ ou partagez votre localisation.")
+        resp = build_response("📍 Top départ ! Où faut-il venir chercher le colis ? Vous pouvez partager votre position ou tapez l'adresse.")
         resp["ask_location"] = True
         return resp
 
@@ -78,7 +78,8 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             nr["depart"] = "Position actuelle"
             nr["coordonnees_gps"] = f"{lat},{lng}"
             session["step"] = "COURIER_DEST"
-            return build_response("✅ Localisation départ enregistrée.\n📍 Quelle est l’adresse de destination ?")
+            return build_response(
+                "✅ Localisation de départ enregistrée.\n📍 Quelle est l’adresse de destination du colis ?")
 
         if step == "COURIER_DEST":
             nr = session.setdefault("new_request", {})
@@ -124,11 +125,12 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         dest_aff = "Position partagée" if d.get("coordonnees_livraison") else d.get("destination")
         recap = (
             "📝 Récapitulatif de votre demande :\n"
-            f"• Départ : {d.get('depart')}\n"
-            f"• Destination : {dest_aff}\n"
-            f"• Destinataire : {d.get('destinataire_nom')} ({d.get('destinataire_tel')})\n"
-            f"• Valeur : {d.get('value_fcfa')} FCFA\n"
-            f"• Description : {d.get('description')}\n\n"
+            "\n"
+            f"• *Départ* : {d.get('depart')}\n"
+            f"• *Destination* : {dest_aff}\n"
+            f"• *Destinataire* : {d.get('destinataire_nom')} ({d.get('destinataire_tel')})\n"
+            f"• *Valeur* : {d.get('value_fcfa')} FCFA\n"
+            f"• *Description* : {d.get('description')}\n\n"
             "👉 Confirmez-vous cette demande ?"
         )
         return build_response(recap, ["Confirmer", "Annuler", "Modifier"])
