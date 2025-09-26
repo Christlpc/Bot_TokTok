@@ -237,38 +237,22 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                               list(session["market_merchants"].keys()))
 
     # -------- MARCHANDS --------
-    # -------- MARCHANDS --------
-    # -------- MARCHANDS --------
     if step == "MARKET_MERCHANT":
-        logger.debug(
-            f"[MARKET] Step=MARKET_MERCHANT | Input={t} | Merchants keys={list(session.get('market_merchants', {}).keys())}")
-
         merchants = session.get("market_merchants", {})
         if t not in merchants:
-            logger.warning(f"[MARKET] Invalid merchant choice '{t}' | Available={list(merchants.keys())}")
             return build_response("⚠️ Choisissez un numéro valide de marchand.", list(merchants.keys()))
-
         merchant = merchants[t]
         session["market_merchant"] = merchant
         session["step"] = "MARKET_PRODUCTS"
 
-        logger.info(f"[MARKET] Merchant selected: {merchant}")
-
-        # récupérer tous les produits
         r = api_request(session, "GET", "/api/v1/marketplace/produits/")
-        logger.debug(f"[MARKET] API produits status={r.status_code}")
-        try:
-            data = r.json()
-        except Exception as e:
-            logger.error(f"[MARKET] JSON decode error: {e}")
-            return build_response("❌ Erreur lors de la récupération des produits.", MAIN_MENU_BTNS)
-
-        logger.debug(f"[MARKET] Produits bruts: {data}")
-
+        data = r.json() if r.status_code == 200 else []
         produits = data.get("results", []) if isinstance(data, dict) else data
-        produits = [p for p in produits if p.get("entreprise_id") == merchant["id"]]
 
-        logger.info(f"[MARKET] Produits filtrés pour entreprise_id={merchant['id']} -> count={len(produits)}")
+        # 🔑 correction : filtre par champ 'entreprise'
+        produits = [p for p in produits if p.get("entreprise") == merchant["id"]]
+
+        logger.debug(f"[MARKET] Produits trouvés pour entreprise_id={merchant['id']} -> {len(produits)}")
 
         if not produits:
             return build_response(f"❌ Aucun produit disponible chez *{merchant.get('nom_entreprise', '—')}*.",
@@ -276,18 +260,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         produits = produits[:5]
         session["market_products"] = {str(i + 1): p for i, p in enumerate(produits)}
-
         lignes = []
         for i, p in enumerate(produits, start=1):
             nom = p.get("nom", "—")
             prix = p.get("prix", "0")
             ligne = f"{i}. {nom} — {prix} FCFA"
-            if p.get("photo_url"):
-                ligne += f"\n🖼️ {p['photo_url']}"
+            if p.get("image"):
+                ligne += f"\n🖼️ {p['image']}"
             lignes.append(ligne)
-
-        logger.debug(f"[MARKET] Produits affichés: {lignes}")
-
         return build_response(f"📦 Produits de *{merchant.get('nom_entreprise', '—')}* :\n" + "\n".join(lignes),
                               list(session["market_products"].keys()))
 
