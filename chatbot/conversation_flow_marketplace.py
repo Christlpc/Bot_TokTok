@@ -172,26 +172,41 @@ def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
 # -----------------------------
 # Création mission (réutilise coursier)
 # -----------------------------
-def _marketplace_create_mission(session: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Prépare new_request pour ressembler à une mission coursier:
-    - adresse_recuperation = marchand
-    - adresse_livraison   = client (destination saisie)
-    """
-    nr = session.setdefault("new_request", {})
-    merchant = session.get("market_merchant") or {}
+def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        d = session.get("new_request", {})
+        merchant = session.get("market_merchant", {})
+        produit = session.get("selected_product", {})
 
-    pickup_addr, pickup_coords = _merchant_pickup_info(merchant)
+        payload = {
+            "entreprise": merchant.get("id"),
+            "adresse_livraison": d.get("depart", "Client non précisé"),
+            "coordonnees_gps": d.get("coordonnees_gps", ""),
+            "notes_client": d.get("description", ""),
+            "details": [
+                {
+                    "produit": produit.get("id"),
+                    "quantite": 1
+                }
+            ]
+        }
 
-    # overwrite explicit pour éviter mélange
-    nr["depart"] = pickup_addr
-    nr["coordonnees_gps"] = pickup_coords  # côté coursier: 'coordonnees_recuperation'
+        logger.debug(f"[MARKET] Payload commande: {payload}")
+        r = api_request(session, "POST", "/api/v1/marketplace/commandes/", json=payload)
+        r.raise_for_status()
+        order = r.json()
+        session["step"] = "MENU"
 
-    # la destination a été demandée à l'étape MARKET_DESTINATION
-    # (nr["destination"] est déjà posé)
+        msg = (
+            "✅ Votre commande Marketplace a été enregistrée.\n"
+            f"🔖 Numéro: {order.get('id')}\n"
+            "🚚 Un livreur prendra en charge la livraison très bientôt."
+        )
+        return build_response(msg, MAIN_MENU_BTNS)
 
-    from .conversation_flow_coursier import courier_create
-    return courier_create(session)
+    except Exception as e:
+        logger.error(f"[MARKET] create error: {e}")
+        return build_response("❌ Une erreur est survenue lors de la création de la commande.", MAIN_MENU_BTNS)
 
 # -----------------------------
 # Flow Marketplace principal
@@ -277,10 +292,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         if t not in produits:
             return build_response("⚠️ Choisissez un numéro valide de produit.", list(produits.keys()))
         produit = produits[t]
-        nr = session.setdefault("new_request", {})
-        nr["market_choice"] = produit.get("nom") or produit.get("name")
-        nr["description"]   = produit.get("description", "") or produit.get("details", "")
-        nr["value_fcfa"]    = produit.get("prix", 0) or produit.get("price", 0)
+        session["selected_product"] = produit
+        session.setdefault("new_request", {})
+        session["new_request"]["market_choice"] = produit.get("nom")
+        session["new_request"]["description"] = produit.get("description", "")
+        session["new_request"]["value_fcfa"] = produit.get("prix", 0)
+        session["step"] = "MARKETPLACE_LOCATION"
 
         # pas de mélange : pour Marketplace, on demandera la DESTINATION (client)
         session["step"] = "MARKET_DESTINATION"
@@ -342,7 +359,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     # -------- CONFIRMATION --------
     if step == "MARKET_CONFIRM":
         if t in {"confirmer", "oui"}:
-            return _marketplace_create_mission(session)
+            return marketplace_create_order(session)
         if t in {"annuler", "non"}:
             session["step"] = "MENU"
             session.pop("new_request", None)
