@@ -39,7 +39,7 @@ def marketplace_create_as_coursier(session: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------
 # Flow Marketplace
 # ------------------------------------------------------
-def flow_marketplace_handle(session: Dict[str, Any], text: str,
+def handle_message(session: Dict[str, Any], text: str,
                             lat: Optional[float]=None, lng: Optional[float]=None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
