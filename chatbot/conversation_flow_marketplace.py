@@ -77,7 +77,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             r = api_request(session, "GET", "/api/v1/auth/entreprises/")
             data = r.json() if r.status_code == 200 else []
             merchants = data.get("results", []) if isinstance(data, dict) else data
-            merchants = [m for m in merchants if m.get("categorie_id") == selected["id"]]
+            merchants = [m for m in merchants if m.get("type_entreprise") == selected["id"]]
         except Exception as e:
             logger.error(f"[MARKETPLACE] entreprises error: {e}")
             merchants = []
