@@ -149,7 +149,14 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
                           list(session["market_categories"].keys()))
 
 def _merchant_display_name(ent: Dict[str, Any]) -> str:
-    return ent.get("nom") or ent.get("name") or ent.get("display_name") or ent.get("raison_sociale") or "—"
+    return (
+        ent.get("nom_entreprise")      # <-- priorité
+        or ent.get("nom")
+        or ent.get("name")
+        or ent.get("display_name")
+        or ent.get("raison_sociale")
+        or "—"
+    )
 
 def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
     """
