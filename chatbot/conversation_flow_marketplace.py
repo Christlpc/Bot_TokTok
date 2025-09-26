@@ -188,21 +188,26 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
         produit = session.get("selected_product", {})
 
         payload = {
-            "entreprise": merchant.get("id"),
-            "adresse_livraison": d.get("depart", "Client non précisé"),
-            "coordonnees_gps": d.get("coordonnees_gps", ""),
-            "notes_client": d.get("description", ""),
+            "entreprise": int(merchant.get("id", 0)),
+            "adresse_livraison": d.get("depart") or "Adresse non précisée",
+            "coordonnees_gps": d.get("coordonnees_gps") or "0,0",
+            "notes_client": d.get("description") or "",
             "details": [
                 {
-                    "produit": produit.get("id"),
+                    "produit": int(produit.get("id", 0)),
                     "quantite": 1
                 }
             ]
         }
 
-        logger.debug(f"[MARKET] Payload commande: {payload}")
+        logger.debug(f"[MARKET] Payload commande envoyé: {payload}")
         r = api_request(session, "POST", "/api/v1/marketplace/commandes/", json=payload)
-        r.raise_for_status()
+
+        if not r.ok:
+            # Log complet de la réponse pour debug
+            logger.error(f"[MARKET] Erreur {r.status_code}: {r.text}")
+            r.raise_for_status()
+
         order = r.json()
 
         # Nettoyer le contexte marketplace
@@ -216,7 +221,7 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
         return build_response(msg, MAIN_MENU_BTNS)
 
     except Exception as e:
-        logger.error(f"[MARKET] create error: {e}")
+        logger.exception(f"[MARKET] create error: {e}")
         session["step"] = "MENU"
         return build_response("❌ Une erreur est survenue lors de la création de la commande.", MAIN_MENU_BTNS)
 
