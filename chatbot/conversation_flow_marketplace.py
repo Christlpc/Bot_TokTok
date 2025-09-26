@@ -39,7 +39,7 @@ def marketplace_create_as_coursier(session: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------
 # Flow Marketplace
 # ------------------------------------------------------
-def handle_message(session: Dict[str, Any], text: str,
+def flow_marketplace_handle(session: Dict[str, Any], text: str,
                             lat: Optional[float]=None, lng: Optional[float]=None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
@@ -162,3 +162,13 @@ def handle_message(session: Dict[str, Any], text: str,
 
     # -------- FALLBACK --------
     return ai_fallback(text, session.get("phone"))
+
+# ------------------------------------------------------
+# Wrapper pour compatibilité avec router
+# ------------------------------------------------------
+def handle_message(phone: str, text: str,
+                   *, lat: Optional[float]=None,
+                   lng: Optional[float]=None,
+                   **_) -> Dict[str, Any]:
+    session = get_session(phone)
+    return flow_marketplace_handle(session, text, lat=lat, lng=lng)
