@@ -215,7 +215,7 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
 
         msg = (
             "✅ Votre commande Marketplace a été enregistrée.\n"
-            f"🔖 Numéro: {order.get('id')}\n"
+            f"🔖 Numéro: {order.get('numero_commande')}\n"
             "🚚 Un livreur prendra en charge la livraison très bientôt."
         )
         return build_response(msg, MAIN_MENU_BTNS)
