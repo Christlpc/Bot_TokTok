@@ -1,8 +1,7 @@
+# chatbot/conversation_flow_marketplace.py
 from __future__ import annotations
-import os, re, logging, requests
+import os, logging, requests
 from typing import Dict, Any, Optional
-from urllib.parse import quote_plus
-from datetime import datetime
 from openai import OpenAI
 from .auth_core import get_session, build_response, normalize
 from .conversation_flow import ai_fallback
@@ -18,9 +17,9 @@ openai_client  = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 
-# ------------------------------------------------------
+# ----------------------------
 # Helpers
-# ------------------------------------------------------
+# ----------------------------
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
     tok = (session.get("auth") or {}).get("access")
     return {"Authorization": f"Bearer {tok}"} if tok else {}
@@ -36,61 +35,52 @@ def marketplace_create_as_coursier(session: Dict[str, Any]) -> Dict[str, Any]:
     from .conversation_flow_coursier import courier_create
     return courier_create(session)
 
-# ------------------------------------------------------
-# Start Marketplace
-# ------------------------------------------------------
-def start_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
-    # Récupération des entreprises (avec catégories)
-    r = api_request(session, "GET", "/api/v1/auth/entreprises/")
-    data = r.json() if r.status_code == 200 else []
-    entreprises = data.get("results", []) if isinstance(data, dict) else data
-
-    # Extraire catégories uniques
-    categories = {}
-    for e in entreprises:
-        cat_id = e.get("categorie_id")
-        cat_nom = e.get("categorie_nom", f"Catégorie {cat_id}")
-        if cat_id and cat_nom:
-            categories[str(cat_id)] = {"id": cat_id, "nom": cat_nom}
-
-    if not categories:
-        return build_response("❌ Aucune catégorie disponible pour le moment.", MAIN_MENU_BTNS)
-
-    # Mapper pour la session (1,2,3…)
-    cats_list = list(categories.values())
-    session["market_categories"] = {str(i+1): c for i, c in enumerate(cats_list)}
-    session["step"] = "MARKET_CATEGORY"
-
-    lignes = [f"{i+1}. {c['nom']}" for i, c in enumerate(cats_list)]
-    return build_response("🛍️ Choisissez une catégorie :", list(session["market_categories"].keys()))
-
-# ------------------------------------------------------
+# ----------------------------
 # Flow Marketplace
-# ------------------------------------------------------
+# ----------------------------
 def flow_marketplace_handle(session: Dict[str, Any], text: str,
                             lat: Optional[float]=None, lng: Optional[float]=None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
 
-    # -------- START --------
-    if t in {"marketplace"} and step in {"AUTHENTICATED", "MENU"}:
-        return start_marketplace(session)
+    # -------- DEBUT : Lister les catégories --------
+    if step in {"AUTHENTICATED", "MENU"} and t in {"marketplace", "4"}:
+        try:
+            r = api_request(session, "GET", "/api/v1/marketplace/categories/")
+            data = r.json() if r.status_code == 200 else []
+            categories = data.get("results", []) if isinstance(data, dict) else data
+        except Exception as e:
+            logger.error(f"[MARKETPLACE] categories error: {e}")
+            categories = []
 
-    # -------- CATEGORIES --------
+        if not categories:
+            return build_response("❌ Aucune catégorie disponible pour le moment.", MAIN_MENU_BTNS)
+
+        categories = categories[:5]
+        session["market_categories"] = {str(i+1): c for i,c in enumerate(categories)}
+        session["step"] = "MARKET_CATEGORY"
+        lignes = [f"{i+1}. {c.get('nom','—')}" for i,c in enumerate(categories)]
+        return build_response("🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes),
+                              list(session["market_categories"].keys()))
+
+    # -------- Choix Catégorie → lister les entreprises --------
     if step == "MARKET_CATEGORY":
         categories = session.get("market_categories", {})
         if t not in categories:
             return build_response("⚠️ Catégorie invalide. Choisissez un numéro :", list(categories.keys()))
+
         selected = categories[t]
         session["market_category"] = selected
         session["step"] = "MARKET_MERCHANT"
 
-        r = api_request(session, "GET", "/api/v1/auth/entreprises/")
-        data = r.json() if r.status_code == 200 else []
-        merchants = data.get("results", []) if isinstance(data, dict) else data
-
-        # filtrer uniquement ceux de la catégorie
-        merchants = [m for m in merchants if m.get("categorie_id") == selected["id"]]
+        try:
+            r = api_request(session, "GET", "/api/v1/auth/entreprises/")
+            data = r.json() if r.status_code == 200 else []
+            merchants = data.get("results", []) if isinstance(data, dict) else data
+            merchants = [m for m in merchants if m.get("categorie_id") == selected["id"]]
+        except Exception as e:
+            logger.error(f"[MARKETPLACE] entreprises error: {e}")
+            merchants = []
 
         if not merchants:
             return build_response(f"❌ Aucun marchand dans la catégorie *{selected.get('nom')}*.", MAIN_MENU_BTNS)
@@ -101,23 +91,25 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         return build_response(f"🏬 Marchands disponibles :\n" + "\n".join(lignes),
                               list(session["market_merchants"].keys()))
 
-    # -------- MARCHANDS --------
+    # -------- Choix Marchand → lister les produits --------
     if step == "MARKET_MERCHANT":
         merchants = session.get("market_merchants", {})
         if t not in merchants:
             return build_response("⚠️ Choisissez un numéro valide de marchand.", list(merchants.keys()))
+
         merchant = merchants[t]
         session["market_merchant"] = merchant
         session["step"] = "MARKET_PRODUCTS"
 
-        # on récupère les produits de la catégorie
         cat_id = (session.get("market_category") or {}).get("id")
-        r = api_request(session, "GET", f"/api/v1/marketplace/produits/by_category/{cat_id}/")
-        data = r.json() if r.status_code == 200 else []
-        produits = data.get("results", []) if isinstance(data, dict) else data
-
-        # filtrer par entreprise
-        produits = [p for p in produits if p.get("entreprise_id") == merchant["id"]]
+        try:
+            r = api_request(session, "GET", f"/api/v1/marketplace/produits/by_category/{cat_id}/")
+            data = r.json() if r.status_code == 200 else []
+            produits = data.get("results", []) if isinstance(data, dict) else data
+            produits = [p for p in produits if p.get("entreprise_id") == merchant["id"]]
+        except Exception as e:
+            logger.error(f"[MARKETPLACE] produits error: {e}")
+            produits = []
 
         if not produits:
             return build_response(f"❌ Aucun produit disponible chez *{merchant.get('nom','—')}*.", MAIN_MENU_BTNS)
@@ -135,22 +127,24 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         return build_response(f"📦 Produits de *{merchant.get('nom','—')}* :\n" + "\n".join(lignes),
                               list(session["market_products"].keys()))
 
-    # -------- PRODUITS --------
+    # -------- Choix Produit --------
     if step == "MARKET_PRODUCTS":
         produits = session.get("market_products", {})
         if t not in produits:
             return build_response("⚠️ Choisissez un numéro valide de produit.", list(produits.keys()))
+
         produit = produits[t]
         session.setdefault("new_request", {})
         session["new_request"]["market_choice"] = produit.get("nom")
         session["new_request"]["description"] = produit.get("description","")
         session["new_request"]["value_fcfa"] = produit.get("prix",0)
+
         session["step"] = "MARKETPLACE_LOCATION"
         resp = build_response("📍 Indiquez votre adresse de départ ou partagez votre localisation.")
         resp["ask_location"] = True
         return resp
 
-    # -------- LOCALISATION --------
+    # -------- Localisation --------
     if step == "MARKETPLACE_LOCATION":
         if lat is not None and lng is not None:
             session["new_request"]["depart"] = "Position actuelle"
@@ -159,14 +153,16 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             session["new_request"]["depart"] = text
         else:
             return build_response("❌ Veuillez fournir votre localisation.", MAIN_MENU_BTNS)
+
         session["step"] = "MARKET_PAY"
         return build_response("💳 Choisissez un mode de paiement :", ["Espèces", "Mobile Money", "Virement"])
 
-    # -------- PAIEMENT --------
+    # -------- Paiement --------
     if step == "MARKET_PAY":
         mapping = {"espèces":"cash","mobile money":"mobile_money","virement":"virement"}
         if t not in mapping:
             return build_response("Merci de choisir un mode valide.", ["Espèces","Mobile Money","Virement"])
+
         session["new_request"]["payment_method"] = mapping[t]
         session["step"] = "MARKET_CONFIRM"
         d = session["new_request"]
@@ -179,7 +175,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         )
         return build_response(recap, ["Confirmer","Annuler","Modifier"])
 
-    # -------- CONFIRMATION --------
+    # -------- Confirmation --------
     if step == "MARKET_CONFIRM":
         if t in {"confirmer","oui"}:
             return marketplace_create_as_coursier(session)
@@ -192,12 +188,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             return build_response("✏️ Que souhaitez-vous modifier ?", ["Produit","Description","Paiement"])
         return build_response("👉 Répondez par Confirmer, Annuler ou Modifier.", ["Confirmer","Annuler","Modifier"])
 
-    # -------- FALLBACK --------
+    # -------- Fallback --------
     return ai_fallback(text, session.get("phone"))
 
-# ------------------------------------------------------
-# Wrapper pour compatibilité avec router
-# ------------------------------------------------------
+# ----------------------------
+# Wrapper pour router
+# ----------------------------
 def handle_message(phone: str, text: str,
                    *, lat: Optional[float]=None,
                    lng: Optional[float]=None,
