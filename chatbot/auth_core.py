@@ -490,7 +490,7 @@ def ensure_auth_or_ask_password(phone: str, text: str):
         if isinstance(resp, dict) and resp.get("ok"):
             role = resp["role"]
             dn = resp.get("display_name") or phone
-            return route_to_role_menu(session, role, f"👋 Ravi de vous revoir, {dn} !\nVous êtes connecté en tant que *{role}*.\n\nQue souhaitez-vous faire maintenant ?"
+            return route_to_role_menu(session, role, f"👋 Ravi de vous revoir, {dn} !\nVous êtes connecté en tant que *{role}*.\n\nQue souhaitez-vous faire maintenant ?\n\n"
 )
         return resp
 

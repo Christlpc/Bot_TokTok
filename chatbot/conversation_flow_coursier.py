@@ -128,7 +128,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     if step == "COURIER_DEST":
         session["new_request"]["destination"] = text
         session["step"] = "DEST_NOM"
-        return build_response("👤 Quel est le *nom du destinataire* ?")
+        return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`")
 
     if step == "DEST_NOM":
         session["new_request"]["destinataire_nom"] = text
@@ -149,7 +149,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             return build_response("⚠️ Montant invalide. Saisissez un nombre (ex. `15000`).")
         session["new_request"]["value_fcfa"] = amt
         session["step"] = "COURIER_DESC"
-        return build_response("📦 Décrivez brièvement le colis (ex. *Dossier A4 scellé*, *Paquet 2 kg*).")
+        return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.")
 
     if step == "COURIER_DESC":
         session["new_request"]["description"] = text
