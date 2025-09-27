@@ -13,9 +13,11 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # ---------- UI ----------
 WELCOME_TEXT = (
-    "🚚 Bienvenue sur *TokTok Delivery*, votre plateforme de Livraison interactive !\n"
-    "Choisissez *Connexion* ou *Inscription*."
+    "👋 Bienvenue sur *TokTok Delivery* !\n"
+    "Prêt·e à envoyer ou recevoir un colis ?\n"
+    "Commencez par vous *connecter* ou *créer un compte*."
 )
+
 WELCOME_BTNS = ["Connexion", "Inscription", "Aide"]
 SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Entreprise"]
 
@@ -153,14 +155,16 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
     )
     if r.status_code != 200:
         logger.info("login_failed", extra={"event": "login_failed", "phone": username, "status_code": r.status_code})
-        return build_response("❌ Identifiants incorrects.", ["Connexion", "Aide"])
+        return build_response("⛔ Mot de passe incorrect ou compte introuvable.\nRéessayez ou tapez *Aide* si besoin."
+, ["Connexion", "Aide"])
 
     data = r.json() or {}
     access = data.get("access") or data.get("token")
     refresh = data.get("refresh")
     if not access:
         logger.warning("login_no_token", extra={"event": "login_no_token", "phone": username})
-        return build_response("❌ Erreur technique : token manquant.")
+        return build_response("⚠️ Une erreur technique est survenue. Impossible de récupérer votre session.\nVeuillez réessayer dans quelques instants."
+)
 
     session["auth"]["access"] = access
     session["auth"]["refresh"] = refresh
@@ -207,14 +211,16 @@ def _parse_api_errors(resp_json: dict) -> str:
                 item = str(msgs)
             items.append(f"- {field}: {item}")
         suffix = "\n".join(items)
-        return (msg + "\n" + suffix).strip() if msg else ("Validation:\n" + suffix)
+        return (msg + "\n" + suffix).strip() if msg else ("🚫 Certains champs sont invalides :\n" + suffix
+)
     return msg or "Données invalides."
 
 # ---------- Wizard d'inscription (Client / Livreur / Entreprise) ----------
 def signup_start(session: Dict[str, Any]):
     session["signup"] = {"role": None, "data": {}, "password": None}
     session["step"] = "SIGNUP_ROLE"
-    return build_response("📝 Inscription — choisissez votre *rôle* :", SIGNUP_ROLE_BTNS)
+    return build_response("📝 Super ! Pour commencer, indiquez votre rôle sur TokTok :"
+, SIGNUP_ROLE_BTNS)
 
 def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     session = get_session(phone)
@@ -228,7 +234,8 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
             tl = "entreprise"
         role = m.get(tl)
         if not role:
-            return build_response("Choisissez *Client*, *Livreur* ou *Entreprise*.", SIGNUP_ROLE_BTNS)
+            return build_response("🙏 Je n’ai pas compris ce choix. Vous êtes *Client*, *Livreur* ou *Entreprise* ?"
+, SIGNUP_ROLE_BTNS)
         session["signup"]["role"] = role
         if role == "client":
             session["step"] = "SIGNUP_CLIENT_NAME"
@@ -249,14 +256,14 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_CLIENT_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_CLIENT_ADDRESS"
-        return build_response("📍 *Client* — Votre *adresse principale* ?\nExemple : `25 Avenue de la Paix, Brazzaville`")
+        return build_response("🏠 Quelle est votre adresse principale ?\nExemple : `25 Avenue de la Paix, Brazzaville`"
+)
     if session["step"] == "SIGNUP_CLIENT_ADDRESS":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_CLIENT_PASSWORD"
         return build_response(
-            "🔑 *Client* — Choisissez un *mot de passe*.\n"
-            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`\n"
-            "👉 Minimum 8 caractères, inclure majuscules, chiffres et symboles."
+            "🔐 Créez un mot de passe sécurisé (au moins 8 caractères, avec majuscules, chiffres et symboles)."
+            "\n\nExemples : `Toktok2025!`, `M@Maison123`"
         )
     if session["step"] == "SIGNUP_CLIENT_PASSWORD":
         session["signup"]["password"] = t
@@ -317,7 +324,8 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
-        resp = build_response("📌 Merci de partager la *position exacte* de votre entreprise ou entrez-la manuellement.")
+        resp = build_response("📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou bien entrer l’adresse à la main."
+)
         resp["ask_location"] = "📌 Envoyez votre *position GPS* (exemple : Brazzaville Centre)."
         return resp
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
@@ -432,7 +440,8 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
                     "api_details": j.get("details"),
                 },
             )
-            return build_response("❌ Inscription refusée.\n" + msg)
+            return build_response("🙁 Impossible de finaliser votre inscription :\n" + msg + "\n\nVérifiez les infos saisies ou réessayez plus tard."
+ + msg)
 
         # ✅ login auto
         resp = login_common(session, username=phone_e164, password=pwd)
@@ -440,11 +449,13 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             return build_response("✅ Inscription réussie. ❗ Mais la connexion a échoué, envoyez *Connexion* et votre mot de passe.")
         role_after = resp["role"]
         dn = resp.get("display_name") or phone_e164
-        return route_to_role_menu(session, role_after, f"🎉 Compte créé pour {dn} — rôle *{role_after}*.\n")
+        return route_to_role_menu(session, role_after, f"🎉 Bienvenue {dn} ! Votre compte *{role_after}* est prêt.\nVous pouvez maintenant commencer à utiliser TokTok."
+)
 
     except Exception as e:
         logger.exception("signup_exception", extra={"event": "signup_exception", "role": role, "phone": phone, "err": str(e)})
-        return build_response("❌ Erreur réseau pendant l’inscription. Réessayez plus tard.")
+        return build_response("😓 Une erreur réseau a interrompu l’inscription.\nMerci de réessayer dans quelques minutes."
+)
 
 # ---------- Orchestrateur d’auth ----------
 def ensure_auth_or_ask_password(phone: str, text: str):
@@ -467,7 +478,7 @@ def ensure_auth_or_ask_password(phone: str, text: str):
     if session["step"] == "WELCOME_CHOICE":
         if t in {"connexion", "login"}:
             session["step"] = "LOGIN_WAIT_PASSWORD"
-            return build_response("🔑 Entrez votre *mot de passe* (identifiant = votre numéro WhatsApp).")
+            return build_response("🔑 Entrez votre *mot de passe*.")
         if t in {"inscription", "s'inscrire", "sinscrire", "signup"}:
             return signup_start(session)
         if t in {"aide", "help"}:
@@ -479,7 +490,8 @@ def ensure_auth_or_ask_password(phone: str, text: str):
         if isinstance(resp, dict) and resp.get("ok"):
             role = resp["role"]
             dn = resp.get("display_name") or phone
-            return route_to_role_menu(session, role, f"👋 Bonjour {dn}. Connecté en tant que *{role}*.\n")
+            return route_to_role_menu(session, role, f"👋 Ravi de vous revoir, {dn} !\nVous êtes connecté en tant que *{role}*.\n\nQue souhaitez-vous faire maintenant ?"
+)
         return resp
 
     return build_response(WELCOME_TEXT, WELCOME_BTNS)
