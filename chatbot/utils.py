@@ -108,7 +108,6 @@ def send_whatsapp_media_url(to: str, media_url: str, kind: str = "image", captio
     print("Réponse API media_url:", res.text)
     return res.json()
 
-
 def upload_media(file_path: str, mime: Optional[str] = None) -> dict:
     """
     Upload d’un fichier binaire vers WhatsApp pour obtenir un media_id réutilisable.
@@ -129,7 +128,6 @@ def upload_media(file_path: str, mime: Optional[str] = None) -> dict:
         res = requests.post(upload_url, headers=headers, files=files)
     print("Réponse API upload_media:", res.text)
     return res.json()  # ex: {"id":"MEDIA_ID"}
-
 
 def send_whatsapp_media_id(to: str, media_id: str, kind: str = "image", caption: Optional[str] = None, filename: Optional[str] = None):
     """

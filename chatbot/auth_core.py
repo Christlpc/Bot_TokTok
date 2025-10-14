@@ -307,60 +307,47 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_LIVREUR_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
+
     # ----- Entreprise -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
         session["step"] = "SIGNUP_MARCHAND_TYPE"
 
         # Construction de la réponse avec liste interactive
-        resp = build_response(
-            "🏷️ *Type d'entreprise* ?\n"
-            "Choisissez une catégorie dans la liste ci-dessous :"
-        )
-
-        # Ajout de la liste interactive
-        resp["interactive"] = {
-            "type": "list",
-            "body": {
-                "text": "Sélectionnez le type d'entreprise qui correspond le mieux à votre activité."
-            },
-            "action": {
-                "button": "Choisir une catégorie",
-                "sections": [
+        resp = {
+            "response": "🏷️ *Type d'entreprise* ?\nChoisissez une catégorie dans la liste ci-dessous :",
+            "list": {
+                "title": "Catégories",
+                "rows": [
                     {
-                        "title": "Catégories disponibles",
-                        "rows": [
-                            {
-                                "id": "restaurant",
-                                "title": "🍽️ Restaurant",
-                                "description": "Restaurant, café, fast-food"
-                            },
-                            {
-                                "id": "pharmacie",
-                                "title": "💊 Pharmacie",
-                                "description": "Pharmacie, parapharmacie"
-                            },
-                            {
-                                "id": "supermarche",
-                                "title": "🛒 Supermarché",
-                                "description": "Supermarché, épicerie"
-                            },
-                            {
-                                "id": "boutique",
-                                "title": "👕 Boutique",
-                                "description": "Vêtements, accessoires"
-                            },
-                            {
-                                "id": "electronique",
-                                "title": "📱 Électronique",
-                                "description": "High-tech, électroménager"
-                            },
-                            {
-                                "id": "autre",
-                                "title": "🏢 Autre",
-                                "description": "Autre type d'activité"
-                            }
-                        ]
+                        "id": "restaurant",
+                        "title": "🍽️ Restaurant",
+                        "description": "Restaurant, café, fast-food"
+                    },
+                    {
+                        "id": "pharmacie",
+                        "title": "💊 Pharmacie",
+                        "description": "Pharmacie, parapharmacie"
+                    },
+                    {
+                        "id": "supermarche",
+                        "title": "🛒 Supermarché",
+                        "description": "Supermarché, épicerie"
+                    },
+                    {
+                        "id": "boutique",
+                        "title": "👕 Boutique",
+                        "description": "Vêtements, accessoires"
+                    },
+                    {
+                        "id": "electronique",
+                        "title": "📱 Électronique",
+                        "description": "High-tech, électroménager"
+                    },
+                    {
+                        "id": "autre",
+                        "title": "🏢 Autre",
+                        "description": "Autre type d'activité"
                     }
                 ]
             }
@@ -413,8 +400,6 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
-    return build_response("ℹ️ Reprenez : *Inscription* puis choisissez un rôle.", SIGNUP_ROLE_BTNS)
-
 def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
     role = session["signup"]["role"]
     data = session["signup"]["data"]
