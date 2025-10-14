@@ -307,40 +307,101 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_LIVREUR_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
-
     # ----- Entreprise -----
     if session["step"] == "SIGNUP_MARCHAND_ENTREPRISE":
         session["signup"]["data"]["nom_entreprise"] = t
         session["step"] = "SIGNUP_MARCHAND_TYPE"
-        return build_response("🏷️ *Type d’entreprise* ?\nExemple : `Restaurant`, `Pharmacie`, `Boutique de vêtements`")
+
+        # Construction de la réponse avec liste interactive
+        resp = build_response(
+            "🏷️ *Type d'entreprise* ?\n"
+            "Choisissez une catégorie dans la liste ci-dessous :"
+        )
+
+        # Ajout de la liste interactive
+        resp["interactive"] = {
+            "type": "list",
+            "body": {
+                "text": "Sélectionnez le type d'entreprise qui correspond le mieux à votre activité."
+            },
+            "action": {
+                "button": "Choisir une catégorie",
+                "sections": [
+                    {
+                        "title": "Catégories disponibles",
+                        "rows": [
+                            {
+                                "id": "restaurant",
+                                "title": "🍽️ Restaurant",
+                                "description": "Restaurant, café, fast-food"
+                            },
+                            {
+                                "id": "pharmacie",
+                                "title": "💊 Pharmacie",
+                                "description": "Pharmacie, parapharmacie"
+                            },
+                            {
+                                "id": "supermarche",
+                                "title": "🛒 Supermarché",
+                                "description": "Supermarché, épicerie"
+                            },
+                            {
+                                "id": "boutique",
+                                "title": "👕 Boutique",
+                                "description": "Vêtements, accessoires"
+                            },
+                            {
+                                "id": "electronique",
+                                "title": "📱 Électronique",
+                                "description": "High-tech, électroménager"
+                            },
+                            {
+                                "id": "autre",
+                                "title": "🏢 Autre",
+                                "description": "Autre type d'activité"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        return resp
+
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
-        session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower())
+        # Le texte reçu sera l'ID de la catégorie sélectionnée (ex: "restaurant")
+        session["signup"]["data"]["type_entreprise"] = t.lower()
         session["step"] = "SIGNUP_MARCHAND_DESC"
         return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`")
+
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
         session["step"] = "SIGNUP_MARCHAND_ADR"
-        return build_response("📍 *Adresse* de l’entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`")
+        return build_response("📍 *Adresse* de l'entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`")
+
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
-        resp = build_response("📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou bien entrer l’adresse à la main."
-)
+        resp = build_response(
+            "📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou bien entrer l'adresse à la main.")
         resp["ask_location"] = "📌 Envoyez votre *position GPS* (exemple : Brazzaville Centre)."
         return resp
+
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"
-        return build_response("⏰ *Horaires d’ouverture* ?\nExemple : `Lun-Sam 08h-20h`")
+        return build_response("⏰ *Horaires d'ouverture* ?\nExemple : `Lun-Sam 08h-20h`")
+
     if session["step"] == "SIGNUP_MARCHAND_HOR":
         session["signup"]["data"]["horaires_ouverture"] = t
         session["step"] = "SIGNUP_MARCHAND_CONTACT"
         return build_response("👤 *Prénom Nom* du responsable ?\nExemple : `Pierre Mabiala`")
+
     if session["step"] == "SIGNUP_MARCHAND_CONTACT":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_MARCHAND_EMAIL"
         return build_response("📧 *Email* du responsable ?\nExemple : `responsable@entreprise.com`")
+
     if session["step"] == "SIGNUP_MARCHAND_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_MARCHAND_PASSWORD"
@@ -348,10 +409,10 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
             "🔑 *Entreprise* — Choisissez un *mot de passe*.\n"
             "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`"
         )
+
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
         session["signup"]["password"] = t
         return signup_submit(session, phone)
-
     return build_response("ℹ️ Reprenez : *Inscription* puis choisissez un rôle.", SIGNUP_ROLE_BTNS)
 
 def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
