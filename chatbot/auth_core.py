@@ -321,33 +321,33 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
                 "rows": [
                     {
                         "id": "restaurant",
-                        "title": "🍽️ Restaurant",
-                        "description": "Restaurant, café, fast-food"
+                        "title": "Restaurant",
+                        "description": "🍽️ Restaurant, café, fast-food"
                     },
                     {
                         "id": "pharmacie",
-                        "title": "💊 Pharmacie",
-                        "description": "Pharmacie, parapharmacie"
+                        "title": "Pharmacie",
+                        "description": "💊 Pharmacie, parapharmacie"
                     },
                     {
                         "id": "supermarche",
-                        "title": "🛒 Supermarché",
-                        "description": "Supermarché, épicerie"
+                        "title": "Supermarché",
+                        "description": "🛒 Supermarché, épicerie"
                     },
                     {
                         "id": "boutique",
-                        "title": "👕 Boutique",
-                        "description": "Vêtements, accessoires"
+                        "title": "Boutique",
+                        "description": "👕 Vêtements, accessoires"
                     },
                     {
                         "id": "electronique",
-                        "title": "📱 Électronique",
-                        "description": "High-tech, électroménager"
+                        "title": "Électronique",
+                        "description": "📱 High-tech, électroménager"
                     },
                     {
                         "id": "autre",
-                        "title": "🏢 Autre",
-                        "description": "Autre type d'activité"
+                        "title": "Autre",
+                        "description": "🏢 Autre type d'activité"
                     }
                 ]
             }
