@@ -267,12 +267,22 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
     step = session.get("step", "MENU")
     t = normalize(text) if text else ""
 
+    # ✅ Helper: Vérifier le retour (avant et après normalize)
+    def _is_retour(txt: str) -> bool:
+        if not txt:
+            return False
+        # Vérifier le texte brut avec emoji
+        if "🔙" in txt or txt.strip().lower().startswith("retour"):
+            return True
+        # Vérifier après normalisation
+        return normalize(txt) == "retour"
+
     # -------- CATÉGORIES --------
     if step == "MARKET_CATEGORY":
         cats = session.get("market_categories", {})
 
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             _cleanup_marketplace_session(session)
             session["step"] = "MENU"
             return build_response("✅ Retour au menu principal.", MAIN_MENU_BTNS)
@@ -308,7 +318,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
         merchants = session.get("market_merchants", {})
 
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_CATEGORY"
             cats = session.get("market_categories", {})
             btns = list(cats.keys())[:3] + ["🔙 Retour"]
@@ -353,7 +363,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
         produits = session.get("market_products", {})
 
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_MERCHANT"
             merchants = session.get("market_merchants", {})
             btns = list(merchants.keys())[:3] + ["🔙 Retour"]
@@ -383,7 +393,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
     # -------- DESTINATION (CLIENT) --------
     if step == "MARKET_DESTINATION":
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_PRODUCTS"
             produits = session.get("market_products", {})
             btns = list(produits.keys())[:3] + ["🔙 Retour"]
@@ -412,7 +422,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
     # -------- PAIEMENT --------
     if step == "MARKET_PAY":
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_DESTINATION"
             resp = build_response(
                 "📍 Nouvelle adresse de livraison ?\n"
@@ -462,7 +472,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
     # -------- CONFIRMATION --------
     if step == "MARKET_CONFIRM":
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_PAY"
             return build_response(
                 "💳 Choisissez un mode de paiement :",
@@ -492,7 +502,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
     # -------- EDIT --------
     if step == "MARKET_EDIT":
         # ✅ Reconnaître le retour
-        if t == "retour":
+        if _is_retour(text):
             session["step"] = "MARKET_CONFIRM"
             d = session.get("new_request", {})
             merchant = session.get("market_merchant", {})
