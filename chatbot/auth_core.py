@@ -355,10 +355,7 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         return resp
 
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
-        # Normaliser le texte reçu : minuscules + retirer les accents
-        from unicodedata import normalize
-        normalized = normalize('NFKD', t).encode('ASCII', 'ignore').decode('ASCII')
-        session["signup"]["data"]["type_entreprise"] = normalized.lower().strip()
+        session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower().strip())
         session["step"] = "SIGNUP_MARCHAND_DESC"
         return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`")
 
