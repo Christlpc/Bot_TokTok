@@ -15,6 +15,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 
+
 # -----------------------------
 # Helpers UI
 # -----------------------------
@@ -25,9 +26,11 @@ def _fmt_fcfa(n: Any) -> str:
     except Exception:
         return str(n)
 
+
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
     tok = (session.get("auth") or {}).get("access")
     return {"Authorization": f"Bearer {tok}"} if tok else {}
+
 
 def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     headers = {**_headers(session), **kwargs.pop("headers", {})}
@@ -35,6 +38,95 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     r = requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
     logger.debug(f"[API-M] {method} {path} -> {r.status_code}")
     return r
+
+
+# Fonction helper pour gérer le retour à chaque étape
+def _handle_retour(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Traite les demandes de retour selon l'étape actuelle.
+    Retourne la réponse appropriée ou None si ce n'est pas un retour.
+    """
+    step = session.get("step", "MENU")
+
+    if step == "MARKET_CATEGORY":
+        # Retour du choix de catégorie vers le menu principal
+        _cleanup_marketplace_session(session)
+        return build_response("✅ Retour au menu principal.", MAIN_MENU_BTNS)
+
+    elif step == "MARKET_MERCHANT":
+        # Retour du choix de marchand vers les catégories
+        session["step"] = "MARKET_CATEGORY"
+        cats = session.get("market_categories", {})
+        btns = list(cats.keys())[:3] + ["🔙 Retour"]
+        return build_response("🔙 Sélectionnez une autre catégorie :", btns)
+
+    elif step == "MARKET_PRODUCTS":
+        # Retour du choix de produit vers les marchands
+        session["step"] = "MARKET_MERCHANT"
+        merchants = session.get("market_merchants", {})
+        btns = list(merchants.keys())[:3] + ["🔙 Retour"]
+        return build_response("🔙 Choisissez un autre marchand :", btns)
+
+    elif step == "MARKET_DESTINATION":
+        # Retour de l'adresse vers les produits
+        session["step"] = "MARKET_PRODUCTS"
+        produits = session.get("market_products", {})
+        btns = list(produits.keys())[:3] + ["🔙 Retour"]
+        return build_response("🔙 Choisissez un autre produit :", btns)
+
+    elif step == "MARKET_PAY":
+        # Retour du paiement vers l'adresse
+        session["step"] = "MARKET_DESTINATION"
+        resp = build_response("📍 Nouvelle adresse de livraison ? Envoyez l'adresse ou partagez la position.")
+        resp["ask_location"] = True
+        return resp
+
+    elif step == "MARKET_CONFIRM":
+        # Retour de la confirmation vers le paiement
+        session["step"] = "MARKET_PAY"
+        return build_response(
+            "💳 Choisissez un mode de paiement :",
+            ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
+        )
+
+    elif step == "MARKET_EDIT":
+        # Retour de la modification vers la confirmation
+        session["step"] = "MARKET_CONFIRM"
+        d = session.get("new_request", {})
+        merchant = session.get("market_merchant", {})
+        pickup_addr, _ = _merchant_pickup_info(merchant)
+        prix = _fmt_fcfa(d.get("value_fcfa", 0))
+        pay_label = {
+            "espèces": "Espèces",
+            "mobile_money": "Mobile Money",
+            "virement": "Virement",
+        }.get(d.get("payment_method", ""), "—")
+
+        recap = (
+            "📝 *Récapitulatif de votre commande*\n"
+            f"• Marchand : {_merchant_display_name(merchant)}\n"
+            f"• Retrait : {pickup_addr}\n"
+            f"• Livraison : {d.get('depart', '—')}\n"
+            f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
+            f"• Paiement : {pay_label}\n\n"
+            "Tout est bon ?"
+        )
+        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
+
+    return None
+
+
+# Fonction de nettoyage
+def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
+    """Nettoie les données de marketplace de la session."""
+    keys_to_clean = [
+        "market_categories", "market_category", "market_merchants",
+        "market_merchant", "market_products", "selected_product",
+        "new_request"
+    ]
+    for key in keys_to_clean:
+        session.pop(key, None)
+
 
 # -----------------------------
 # Data loaders (robustes)
@@ -81,6 +173,7 @@ def _load_categories(session: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     return cats
 
+
 def _load_merchants_by_category(session: Dict[str, Any], category: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Charge toutes les entreprises puis filtre par category via le champ type_entreprise."""
     try:
@@ -106,6 +199,7 @@ def _load_merchants_by_category(session: Dict[str, Any], category: Dict[str, Any
     except Exception as e:
         logger.error(f"[MARKET] load merchants failed: {e}")
         return []
+
 
 def _load_products_by_category(session: Dict[str, Any], category_id: Any) -> List[Dict[str, Any]]:
     """
@@ -134,6 +228,7 @@ def _load_products_by_category(session: Dict[str, Any], category_id: Any) -> Lis
 
     return []
 
+
 # -----------------------------
 # Flow utils
 # -----------------------------
@@ -142,7 +237,7 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
     if not cats:
         session["step"] = "MENU"
         return build_response(
-            "🛍️ Marketplace indisponible pour l’instant (aucune catégorie).",
+            "🛍️ Marketplace indisponible pour l'instant (aucune catégorie).",
             MAIN_MENU_BTNS
         )
 
@@ -150,22 +245,24 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
     session["step"] = "MARKET_CATEGORY"
 
     lignes = [f"{i + 1}. {c.get('nom') or c.get('name') or '—'}" for i, c in enumerate(cats)]
-    # Affiche les numéros en boutons (max 3 gérés par build_response)
-    btns = list(session["market_categories"].keys())[:3]
+    # Affiche les numéros en boutons (max 3 gérés par build_response) + Retour
+    btns = list(session["market_categories"].keys())[:3] + ["🔙 Retour"]
     return build_response(
         "🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes) + "\n\nVous pouvez répondre par le *numéro*.",
         btns
     )
 
+
 def _merchant_display_name(ent: Dict[str, Any]) -> str:
     return (
-        ent.get("nom_entreprise")
-        or ent.get("nom")
-        or ent.get("name")
-        or ent.get("display_name")
-        or ent.get("raison_sociale")
-        or "—"
+            ent.get("nom_entreprise")
+            or ent.get("nom")
+            or ent.get("name")
+            or ent.get("display_name")
+            or ent.get("raison_sociale")
+            or "—"
     )
+
 
 def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
     """Retourne (adresse_recuperation_text, coordonnees_recuperation_str)."""
@@ -174,6 +271,7 @@ def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
     lng = ent.get("longitude") or ent.get("lng")
     coords = f"{lat},{lng}" if (lat is not None and lng is not None) else ""
     return str(addr), coords
+
 
 # -----------------------------
 # Création commande Marketplace
@@ -190,135 +288,117 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             "coordonnees_gps": d.get("coordonnees_gps") or "0,0",
             "notes_client": d.get("description") or "",
             "details": [
-                {"produit": int(produit.get("id", 0)), "quantite": 1}
-            ]
+                {
+                    "produit": int(produit.get("id", 0)),
+                    "quantite": 1,
+                    "prix_unitaire": float(produit.get("prix", 0)),
+                }
+            ],
+            "status": "en_attente",
         }
 
-        logger.debug(f"[MARKET] Payload commande envoyé: {payload}")
+        # Mode paiement
+        pay_method = d.get("payment_method", "espèces")
+        payload["mode_paiement"] = pay_method
+
+        # Création via API
         r = api_request(session, "POST", "/api/v1/marketplace/commandes/", json=payload)
 
-        if not r.ok:
-            logger.error(f"[MARKET] Erreur {r.status_code}: {r.text}")
-            r.raise_for_status()
+        if r.ok:
+            order_data = r.json()
+            order_id = order_data.get("id", "N/A")
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
 
-        order = r.json()
-        _cleanup_marketplace_session(session)
-
-        msg = (
-            "🎉 *Commande enregistrée !*\n"
-            f"🔖 Numéro : {order.get('numero_commande', '—')}\n"
-            "🚚 Un·e livreur·se prendra la livraison très bientôt. "
-            "Vous serez notifié dès l’affectation."
-        )
-        return build_response(msg, MAIN_MENU_BTNS)
+            recap = (
+                "✅ *Commande créée avec succès* !\n\n"
+                f"Numéro de commande : *{order_id}*\n"
+                f"Marchand : {_merchant_display_name(merchant)}\n"
+                f"Produit : {d.get('market_choice', '—')}\n"
+                f"Montant : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA\n"
+                f"Mode paiement : {pay_method}\n\n"
+                "Vous pouvez suivre votre commande avec le bouton 'Suivre ma demande'."
+            )
+            return build_response(recap, MAIN_MENU_BTNS)
+        else:
+            error_msg = r.text if r.text else "Erreur de création"
+            logger.error(f"[MARKET] order creation failed: {error_msg}")
+            return build_response(
+                f"❌ Erreur lors de la création de la commande.\n{error_msg}",
+                MAIN_MENU_BTNS
+            )
 
     except Exception as e:
-        logger.exception(f"[MARKET] create error: {e}")
-        session["step"] = "MENU"
+        logger.error(f"[MARKET] exception in marketplace_create_order: {e}")
         return build_response(
-            "😓 Impossible de finaliser la commande pour le moment. Réessayez un peu plus tard.",
+            f"❌ Une erreur s'est produite : {str(e)}",
             MAIN_MENU_BTNS
         )
 
-def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
-    """Nettoie toutes les données marketplace de la session."""
-    session["step"] = "MENU"
-    for key in [
-        "new_request", "market_category", "market_categories",
-        "market_merchant", "market_merchants", "market_products", "selected_product"
-    ]:
-        session.pop(key, None)
 
-# -----------------------------
-# Flow Marketplace principal
-# -----------------------------
-def flow_marketplace_handle(session: Dict[str, Any], text: str,
-                            lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
+# Main flow handler
+def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
+                            lat: Optional[float] = None,
+                            lng: Optional[float] = None) -> Dict[str, Any]:
     """
-    Flow Marketplace :
-    Catégorie -> Marchand -> Produits -> Adresse de livraison -> Paiement -> Confirmation
+    Gère tout le flux Marketplace avec support du Retour à chaque étape.
     """
-    step = session.get("step")
-    t = (normalize(text) or "").lower()
+    step = session.get("step", "MENU")
+    t = normalize(text) if text else ""
 
-    # Raccourcis utiles
-    if t in {"menu", "accueil", "0"}:
-        _cleanup_marketplace_session(session)
-        return build_response("🏠 Menu principal — que souhaitez-vous faire ?", MAIN_MENU_BTNS)
+    # Vérifier si l'utilisateur demande un retour
+    if t in {"retour", "🔙 retour", "🔙", "back"}:
+        retour_resp = _handle_retour(session)
+        if retour_resp:
+            return retour_resp
 
-    marketplace_steps = {
-        "MARKET_CATEGORY", "MARKET_MERCHANT", "MARKET_PRODUCTS",
-        "MARKET_DESTINATION", "MARKET_PAY", "MARKET_CONFIRM", "MARKET_EDIT"
-    }
-
-    # Démarrage du flow si on n'est pas déjà dedans
-    if step not in marketplace_steps:
-        return _begin_marketplace(session)
-
-    # -------- CATEGORIES --------
+    # -------- CATÉGORIES --------
     if step == "MARKET_CATEGORY":
-        categories = session.get("market_categories", {})
-        if t not in categories:
-            btns = list(categories.keys())[:3]
-            return build_response("⚠️ Choix invalide. Répondez avec le *numéro* de la catégorie.", btns)
-        selected = categories[t]
-        session["market_category"] = selected
-        session["step"] = "MARKET_MERCHANT"
+        cats = session.get("market_categories", {})
 
-        merchants = _load_merchants_by_category(session, selected)
+        if t not in cats:
+            btns = list(cats.keys())[:3] + ["🔙 Retour"]
+            return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* de la catégorie.", btns)
+
+        cat = cats[t]
+        session["market_category"] = cat
+        merchants = _load_merchants_by_category(session, cat)
+
         if not merchants:
             session["step"] = "MARKET_CATEGORY"
-            btns = list(categories.keys())[:3]
+            btns = list(cats.keys())[:3] + ["🔙 Retour"]
             return build_response(
-                f"😕 Aucun marchand trouvé dans *{selected.get('nom') or selected.get('name') or '—'}*.\n"
-                "Choisissez une autre catégorie :",
+                f"❌ Aucun marchand pour la catégorie *{cat.get('nom', '—')}*.",
                 btns
             )
 
-        merchants = merchants[:5]
         session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
+        session["step"] = "MARKET_MERCHANT"
+
         lignes = [f"{i + 1}. {_merchant_display_name(m)}" for i, m in enumerate(merchants)]
-        btns = list(session["market_merchants"].keys())[:3] + ["Retour"]
+        btns = list(session["market_merchants"].keys())[:3] + ["🔙 Retour"]
         return build_response(
-            "🏬 Marchands disponibles :\n" + "\n".join(lignes) + "\n\nRépondez par le *numéro* ou *Retour*.",
+            f"🏪 Marchands de *{cat.get('nom', '—')}* :\n" + "\n".join(lignes),
             btns
         )
 
     # -------- MARCHANDS --------
     if step == "MARKET_MERCHANT":
         merchants = session.get("market_merchants", {})
-        if t == "retour":
-            session["step"] = "MARKET_CATEGORY"
-            cats = session.get("market_categories", {})
-            btns = list(cats.keys())[:3]
-            return build_response("🔙 Retour aux catégories. Choisissez un *numéro* :", btns)
 
         if t not in merchants:
-            btns = list(merchants.keys())[:3] + ["Retour"]
+            btns = list(merchants.keys())[:3] + ["🔙 Retour"]
             return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* du marchand.", btns)
 
         merchant = merchants[t]
         session["market_merchant"] = merchant
-        session["step"] = "MARKET_PRODUCTS"
-
-        # Charger les produits de ce marchand
-        try:
-            r = api_request(session, "GET", "/api/v1/marketplace/produits/")
-            if r.ok:
-                data = r.json()
-                produits = data.get("results", []) if isinstance(data, dict) else (data or [])
-                produits = [p for p in produits if p.get("entreprise") == merchant.get("id")]
-            else:
-                produits = []
-        except Exception as e:
-            logger.error(f"[MARKET] Erreur chargement produits: {e}")
-            produits = []
+        produits = _load_products_by_category(session, merchant.get("id"))
 
         if not produits:
-            btns = list(merchants.keys())[:3] + ["Retour"]
+            session["step"] = "MARKET_MERCHANT"
+            btns = list(merchants.keys())[:3] + ["🔙 Retour"]
             return build_response(
-                f"😕 Aucun produit disponible chez *{_merchant_display_name(merchant)}*.\n"
-                "Choisissez un autre marchand :",
+                f"❌ Aucun produit disponible chez {_merchant_display_name(merchant)}.",
                 btns
             )
 
@@ -333,10 +413,10 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 ligne += f"\n🖼️ {p['image']}"
             lignes.append(ligne)
 
-        btns = list(session["market_products"].keys())[:3] + ["Retour"]
+        btns = list(session["market_products"].keys())[:3] + ["🔙 Retour"]
         return build_response(
             f"📦 Produits de *{_merchant_display_name(merchant)}* :\n" + "\n".join(lignes) +
-            "\n\nRépondez par le *numéro* ou *Retour*.",
+            "\n\nRépondez par le *numéro*.",
             btns
         )
 
@@ -344,14 +424,8 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     if step == "MARKET_PRODUCTS":
         produits = session.get("market_products", {})
 
-        if t == "retour":
-            session["step"] = "MARKET_MERCHANT"
-            merchants = session.get("market_merchants", {})
-            btns = list(merchants.keys())[:3] + ["Retour"]
-            return build_response("🔙 Choisissez un autre marchand :", btns)
-
         if t not in produits:
-            btns = list(produits.keys())[:3] + ["Retour"]
+            btns = list(produits.keys())[:3] + ["🔙 Retour"]
             return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* du produit.", btns)
 
         produit = produits[t]
@@ -364,8 +438,9 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         resp = build_response(
             "📍 Où livrer la commande ?\n"
-            "• Envoyez *l’adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
-            "• ou *partagez votre position*."
+            "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
+            "• ou *partagez votre position*.\n"
+            "• Ou tapez *Retour* pour revenir."
         )
         resp["ask_location"] = True
         return resp
@@ -381,14 +456,17 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             session["new_request"]["depart"] = text
             session["new_request"]["coordonnees_gps"] = ""
         else:
-            resp = build_response("⚠️ J’ai besoin d’une adresse ou de votre position pour livrer.")
+            resp = build_response(
+                "⚠️ J'ai besoin d'une adresse ou de votre position pour livrer.\n"
+                "(Ou tapez *Retour* pour revenir.)"
+            )
             resp["ask_location"] = True
             return resp
 
         session["step"] = "MARKET_PAY"
         return build_response(
             "💳 Choisissez un mode de paiement :",
-            ["Espèces", "Mobile Money", "Virement"]
+            ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
         )
 
     # -------- PAIEMENT --------
@@ -402,7 +480,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         if key not in mapping:
             return build_response(
                 "🙏 Merci de choisir un mode valide.",
-                ["Espèces", "Mobile Money", "Virement"]
+                ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
             )
 
         session.setdefault("new_request", {})["payment_method"] = mapping[key]
@@ -427,16 +505,13 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             f"• Paiement : {pay_label}\n\n"
             "Tout est bon ?"
         )
-        return build_response(recap, ["Confirmer", "Modifier", "Annuler"])
+        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
     # -------- CONFIRMATION --------
     if step == "MARKET_CONFIRM":
         if t in {"confirmer", "oui", "ok"}:
-            # Petite transition douce
             interim = build_response("✨ Je finalise votre commande…")
-            # On enchaîne tout de suite avec la création (pas d'attente async)
             result = marketplace_create_order(session)
-            # On donne priorité au résultat final
             return result if result else interim
 
         if t in {"annuler", "non"}:
@@ -450,23 +525,32 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 ["Produit", "Paiement", "Adresse de livraison", "Annuler"]
             )
 
-        return build_response("👉 Répondez par *Confirmer*, *Modifier* ou *Annuler*.", ["Confirmer", "Modifier", "Annuler"])
+        return build_response(
+            "👉 Répondez par *Confirmer*, *Modifier* ou *Annuler*.",
+            ["Confirmer", "Modifier", "Annuler", "🔙 Retour"]
+        )
 
     # -------- EDIT --------
     if step == "MARKET_EDIT":
         if t == "produit":
             session["step"] = "MARKET_PRODUCTS"
             produits = session.get("market_products", {})
-            btns = list(produits.keys())[:3] + ["Retour"]
+            btns = list(produits.keys())[:3] + ["🔙 Retour"]
             return build_response("📦 Choisissez un autre produit :", btns)
 
         if t == "paiement":
             session["step"] = "MARKET_PAY"
-            return build_response("💳 Choisissez un autre mode de paiement :", ["Espèces", "Mobile Money", "Virement"])
+            return build_response(
+                "💳 Choisissez un autre mode de paiement :",
+                ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
+            )
 
         if t in ["adresse de livraison", "adresse"]:
             session["step"] = "MARKET_DESTINATION"
-            resp = build_response("📍 Nouvelle adresse de livraison ? Envoyez l’adresse ou partagez la position.")
+            resp = build_response(
+                "📍 Nouvelle adresse de livraison ? Envoyez l'adresse ou partagez la position.\n"
+                "(Ou tapez *Retour* pour revenir.)"
+            )
             resp["ask_location"] = True
             return resp
 
@@ -491,11 +575,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 f"• Paiement : {pay_label}\n\n"
                 "Tout est bon ?"
             )
-            return build_response(recap, ["Confirmer", "Modifier", "Annuler"])
+            return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
         # Choix non reconnu
         return build_response(
-            "Je n’ai pas compris. Que souhaitez-vous modifier ?",
+            "Je n'ai pas compris. Que souhaitez-vous modifier ?",
             ["Produit", "Paiement", "Adresse de livraison", "Annuler"]
         )
 
@@ -503,6 +587,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     if text:
         return ai_fallback(text, session.get("phone"))
     return build_response("🤖 Dites *Marketplace* ou *Menu* pour continuer.", MAIN_MENU_BTNS)
+
 
 # ------------------------------------------------------
 # Wrapper pour compatibilité avec le router
