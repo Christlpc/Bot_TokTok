@@ -449,8 +449,8 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         # Chercher d'abord par indice direct
         if t not in produits:
             # Ensuite par nom du produit
-            if t in product_name_to_id:
-                t = product_name_to_id[t]
+            if normalize(t) in product_name_to_id:  # ← Ajouter normalize()
+                t = product_name_to_id[normalize(t)]
             else:
                 # Vraiment invalide
                 rows = []

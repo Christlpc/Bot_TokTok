@@ -42,7 +42,7 @@ def build_response(text: str, buttons: Optional[List[str]] = None) -> Dict[str, 
     return r
 
 def normalize(s: str) -> str:
-    return " ".join((s or "").split()).strip()
+    return " ".join((s or "").split()).strip().lower()
 
 def _auth_headers(session: Dict[str, Any]) -> Dict[str, str]:
     h: Dict[str, str] = {}
