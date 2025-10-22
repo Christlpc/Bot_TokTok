@@ -1,4 +1,5 @@
 # chatbot/conversation_flow_marketplace.py
+# VERSION CORRIGÉE - Les bugs du mapping bouton/indice sont fixés
 from __future__ import annotations
 import os, logging, requests, re
 from typing import Dict, Any, Optional, List, Tuple
@@ -196,132 +197,151 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
                 "✅ *Commande créée avec succès* !\n\n"
                 f"Numéro : *{order_id}*\n"
                 f"Marchand : {_merchant_display_name(merchant)}\n"
-                f"Produit : {d.get('market_choice', '—')}\n"
-                f"Montant : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA\n"
-                f"Paiement : {pay_method}"
+                f"Livraison : {d.get('depart', '—')}\n"
+                f"Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
             )
             return build_response(recap, MAIN_MENU_BTNS)
-        else:
-            logger.error(f"[MARKET] order creation failed: {r.text}")
-            return build_response(f"❌ Erreur : {r.text[:100]}", MAIN_MENU_BTNS)
-
     except Exception as e:
-        logger.error(f"[MARKET] exception: {e}")
-        return build_response(f"❌ Erreur : {str(e)}", MAIN_MENU_BTNS)
+        logger.error(f"[MARKET] create_order failed: {e}")
+
+    _cleanup_marketplace_session(session)
+    session["step"] = "MENU"
+    return build_response("❌ Erreur lors de la création.", MAIN_MENU_BTNS)
 
 
-# ==================== MAIN FLOW ====================
 def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
-    cats = _load_categories(session)
-    if not cats:
+    try:
+        categories = _load_categories(session)
+        if not categories:
+            session["step"] = "MENU"
+            return build_response("❌ Pas de catégories disponibles.", MAIN_MENU_BTNS)
+
+        session["market_categories"] = {str(i): c for i, c in enumerate(categories)}
+        session["step"] = "MARKET_CATEGORY"
+
+        rows = []
+        for idx, cat in enumerate(categories):
+            nom = cat.get("nom") or cat.get("name", "—")
+            rows.append({
+                "id": str(idx),
+                "title": nom[:30]
+            })
+
+        return _build_list_response("🛍️ *Sélectionnez une catégorie*", rows, section_title="Catégories")
+    except Exception as e:
+        logger.error(f"[MARKET] begin failed: {e}")
         session["step"] = "MENU"
-        return build_response("🛍️ Marketplace indisponible.", MAIN_MENU_BTNS)
-
-    session["market_categories"] = {str(i + 1): c for i, c in enumerate(cats)}
-    session["step"] = "MARKET_CATEGORY"
-
-    rows = []
-    for k in sorted(session["market_categories"].keys(), key=lambda x: int(x)):
-        cat = session["market_categories"][k]
-        nom = cat.get('nom') or cat.get('name') or '—'
-        rows.append({
-            "id": k,
-            "title": nom[:24],
-            "description": f"Catégorie {k}"
-        })
-
-    msg = "🛍️ *Sélectionnez une catégorie*"
-    return _build_list_response(msg, rows, section_title="Catégories")
+        return build_response("❌ Erreur Marketplace.", MAIN_MENU_BTNS)
 
 
-def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
-                            lat: Optional[float] = None,
+def flow_marketplace_handle(session: Dict[str, Any], text: str,
+                            *, lat: Optional[float] = None,
                             lng: Optional[float] = None) -> Dict[str, Any]:
-    step = session.get("step", "MENU")
+    step = session.get("step", "MARKET_CATEGORY")
     t = normalize(text) if text else ""
 
     # ========== CATÉGORIES ==========
     if step == "MARKET_CATEGORY":
-        cats = session.get("market_categories", {})
+        categories = session.get("market_categories", {})
 
-        if _is_retour(text):
-            _cleanup_marketplace_session(session)
-            session["step"] = "MENU"
-            return build_response("✅ Retour au menu.", MAIN_MENU_BTNS)
+        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        category_name_to_id = {}
+        for idx, cat in categories.items():
+            cat_name = normalize(cat.get("nom") or cat.get("name") or "")
+            if cat_name:  # Seulement si le nom normalisé n'est pas vide
+                category_name_to_id[cat_name] = idx
 
-        if t in cats:
-            cat = cats[t]
-            session["market_category"] = cat
-            merchants = _load_merchants_by_category(session, cat)
-
-            if not merchants:
+        # Chercher d'abord par indice direct
+        if t not in categories:
+            # Ensuite par nom de catégorie (depuis bouton interactif)
+            if t in category_name_to_id:
+                t = category_name_to_id[t]
+            else:
+                # Vraiment invalide
                 rows = []
-                for k in sorted(cats.keys(), key=lambda x: int(x)):
-                    c = cats[k]
-                    nom = c.get('nom') or c.get('name') or '—'
+                for k in sorted(categories.keys(), key=lambda x: int(x)):
+                    cat = categories[k]
                     rows.append({
                         "id": k,
-                        "title": nom[:24],
-                        "description": f"Catégorie {k}"
+                        "title": (cat.get("nom") or cat.get("name", ""))[:30]
                     })
-                msg = f"❌ Aucun marchand pour *{cat.get('nom', '—')}*."
+                msg = "⚠️ Choix invalide."
                 return _build_list_response(msg, rows, section_title="Catégories")
 
-            session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
-            session["step"] = "MARKET_MERCHANT"
+        category = categories[t]
+        merchants = _load_merchants_by_category(session, category)
 
+        if not merchants:
             rows = []
-            for i, m in enumerate(merchants, start=1):
+            for k in sorted(categories.keys(), key=lambda x: int(x)):
+                cat = categories[k]
                 rows.append({
-                    "id": str(i),
-                    "title": _merchant_display_name(m)[:24],
-                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                    "id": k,
+                    "title": (cat.get("nom") or cat.get("name", ""))[:30]
                 })
-            msg = f"🏪 *Marchands de {cat.get('nom', '—')}*"
-            return _build_list_response(msg, rows, section_title="Marchands")
+            cat_name = category.get("nom") or category.get("name", "Catégorie")
+            msg = f"❌ Aucun marchand pour *{cat_name}*."
+            return _build_list_response(msg, rows, section_title="Catégories")
+
+        merchants_indexed = {str(i): m for i, m in enumerate(merchants)}
+        session["market_merchants"] = merchants_indexed
+        session["market_category"] = category
+        session["step"] = "MARKET_MERCHANT"
 
         rows = []
-        for k in sorted(cats.keys(), key=lambda x: int(x)):
-            c = cats[k]
-            nom = c.get('nom') or c.get('name') or '—'
+        for k in sorted(merchants_indexed.keys(), key=lambda x: int(x)):
+            m = merchants_indexed[k]
             rows.append({
                 "id": k,
-                "title": nom[:24],
-                "description": f"Catégorie {k}"
+                "title": _merchant_display_name(m)[:24],
+                "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
             })
-        msg = "⚠️ Choix invalide."
-        return _build_list_response(msg, rows, section_title="Catégories")
+
+        cat_name = category.get("nom") or category.get("name", "Catégorie")
+        msg = f"🏪 *Marchands de {cat_name}*"
+        return _build_list_response(msg, rows, section_title="Marchands")
 
     # ========== MARCHANDS ==========
     if step == "MARKET_MERCHANT":
-        merchants = session.get("market_merchants", {})
-
         if _is_retour(text):
             session["step"] = "MARKET_CATEGORY"
-            cats = session.get("market_categories", {})
+            categories = session.get("market_categories", {})
             rows = []
-            for k in sorted(cats.keys(), key=lambda x: int(x)):
-                c = cats[k]
-                nom = c.get('nom') or c.get('name') or '—'
+            for k in sorted(categories.keys(), key=lambda x: int(x)):
+                cat = categories[k]
                 rows.append({
                     "id": k,
-                    "title": nom[:24],
-                    "description": f"Catégorie {k}"
+                    "title": (cat.get("nom") or cat.get("name", ""))[:30]
                 })
             msg = "🔙 *Catégories*"
             return _build_list_response(msg, rows, section_title="Catégories")
 
+        merchants = session.get("market_merchants", {})
+
+        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        merchant_name_to_id = {}
+        for idx, merch in merchants.items():
+            merch_name = normalize(_merchant_display_name(merch))
+            if merch_name:
+                merchant_name_to_id[merch_name] = idx
+
+        # Chercher d'abord par indice direct
         if t not in merchants:
-            rows = []
-            for k in sorted(merchants.keys(), key=lambda x: int(x)):
-                m = merchants[k]
-                rows.append({
-                    "id": k,
-                    "title": _merchant_display_name(m)[:24],
-                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
-                })
-            msg = "⚠️ Choix invalide."
-            return _build_list_response(msg, rows, section_title="Marchands")
+            # Ensuite par nom du marchand
+            if t in merchant_name_to_id:
+                t = merchant_name_to_id[t]
+            else:
+                # Vraiment invalide
+                rows = []
+                for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                    m = merchants[k]
+                    rows.append({
+                        "id": k,
+                        "title": _merchant_display_name(m)[:24],
+                        "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                    })
+                msg = "⚠️ Choix invalide."
+                return _build_list_response(msg, rows, section_title="Marchands")
 
         merchant = merchants[t]
         session["market_merchant"] = merchant
@@ -374,19 +394,32 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
             msg = "🔙 *Marchands*"
             return _build_list_response(msg, rows, section_title="Marchands")
 
+        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        product_name_to_id = {}
+        for idx, prod in produits.items():
+            prod_name = normalize(prod.get("nom") or "")
+            if prod_name:
+                product_name_to_id[prod_name] = idx
+
+        # Chercher d'abord par indice direct
         if t not in produits:
-            rows = []
-            for k in sorted(produits.keys(), key=lambda x: int(x)):
-                p = produits[k]
-                nom = p.get("nom", "—")
-                prix = _fmt_fcfa(p.get("prix", 0))
-                rows.append({
-                    "id": k,
-                    "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
-                    "description": p.get("description", "")[:60] if p.get("description") else ""
-                })
-            msg = "⚠️ Choix invalide."
-            return _build_list_response(msg, rows, section_title="Produits")
+            # Ensuite par nom du produit
+            if t in product_name_to_id:
+                t = product_name_to_id[t]
+            else:
+                # Vraiment invalide
+                rows = []
+                for k in sorted(produits.keys(), key=lambda x: int(x)):
+                    p = produits[k]
+                    nom = p.get("nom", "—")
+                    prix = _fmt_fcfa(p.get("prix", 0))
+                    rows.append({
+                        "id": k,
+                        "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
+                        "description": p.get("description", "")[:60] if p.get("description") else ""
+                    })
+                msg = "⚠️ Choix invalide."
+                return _build_list_response(msg, rows, section_title="Produits")
 
         produit = produits[t]
         session["selected_product"] = produit
