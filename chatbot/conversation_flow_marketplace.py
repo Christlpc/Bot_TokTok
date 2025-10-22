@@ -46,10 +46,23 @@ def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
     keys_to_clean = [
         "market_categories", "market_category", "market_merchants",
         "market_merchant", "market_products", "selected_product",
-        "new_request"
+        "new_request", "market_cat_page"
     ]
     for key in keys_to_clean:
         session.pop(key, None)
+
+
+def _build_whatsapp_list_response(text: str, rows: List[dict], section_title: str = "Options") -> Dict[str, Any]:
+    """
+    Crée une réponse avec liste WhatsApp native.
+    Compatible avec dispatcher qui reconnaît la clé 'whatsapp_list'
+    """
+    resp = build_response(text)
+    resp["whatsapp_list"] = {
+        "rows": rows,
+        "title": section_title
+    }
+    return resp
 
 
 # -----------------------------
@@ -166,15 +179,22 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     session["market_categories"] = {str(i + 1): c for i, c in enumerate(cats)}
+    session["market_cat_page"] = 1
     session["step"] = "MARKET_CATEGORY"
 
-    lignes = [f"{i + 1}. {c.get('nom') or c.get('name') or '—'}" for i, c in enumerate(cats)]
-    # Affiche les numéros en boutons (max 3 gérés par build_response) + Retour
-    btns = list(session["market_categories"].keys())[:3] + ["🔙 Retour"]
-    return build_response(
-        "🛍️ Choisissez une *catégorie* :\n" + "\n".join(lignes) + "\n\nVous pouvez répondre par le *numéro*.",
-        btns
-    )
+    # Construire la liste WhatsApp avec TOUTES les catégories
+    rows = []
+    for k in sorted(session["market_categories"].keys(), key=lambda x: int(x)):
+        cat = session["market_categories"][k]
+        nom = cat.get('nom') or cat.get('name') or '—'
+        rows.append({
+            "id": k,
+            "title": nom[:24],  # Limite WhatsApp
+            "description": f"Catégorie {k}"
+        })
+
+    msg = "🛍️ *Sélectionnez une catégorie*"
+    return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
 
 
 def _merchant_display_name(ent: Dict[str, Any]) -> str:
@@ -287,31 +307,60 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
             session["step"] = "MENU"
             return build_response("✅ Retour au menu principal.", MAIN_MENU_BTNS)
 
-        if t not in cats:
-            btns = list(cats.keys())[:3] + ["🔙 Retour"]
-            return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* de la catégorie.", btns)
+        # ✅ Vérifier si l'utilisateur a sélectionné une catégorie
+        if t in cats:
+            cat = cats[t]
+            session["market_category"] = cat
+            merchants = _load_merchants_by_category(session, cat)
 
-        cat = cats[t]
-        session["market_category"] = cat
-        merchants = _load_merchants_by_category(session, cat)
+            if not merchants:
+                # Réafficher la liste des catégories
+                rows = []
+                for k in sorted(cats.keys(), key=lambda x: int(x)):
+                    c = cats[k]
+                    nom = c.get('nom') or c.get('name') or '—'
+                    rows.append({
+                        "id": k,
+                        "title": nom[:24],
+                        "description": f"Catégorie {k}"
+                    })
+                msg = f"❌ Aucun marchand pour la catégorie *{cat.get('nom', '—')}*.\n\nChoisissez une autre :"
+                return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
 
-        if not merchants:
-            session["step"] = "MARKET_CATEGORY"
-            btns = list(cats.keys())[:3] + ["🔙 Retour"]
-            return build_response(
-                f"❌ Aucun marchand pour la catégorie *{cat.get('nom', '—')}*.",
-                btns
-            )
+            session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
+            session["step"] = "MARKET_MERCHANT"
 
-        session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
-        session["step"] = "MARKET_MERCHANT"
+            # Afficher les marchands en liste si > 3, sinon en boutons
+            if len(merchants) > 3:
+                rows = []
+                for i, m in enumerate(merchants, start=1):
+                    rows.append({
+                        "id": str(i),
+                        "title": _merchant_display_name(m)[:24],
+                        "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                    })
+                msg = f"🏪 *Marchands de {cat.get('nom', '—')}*"
+                return _build_whatsapp_list_response(msg, rows, section_title="Marchands")
+            else:
+                lignes = [f"  {i + 1}. {_merchant_display_name(m)}" for i, m in enumerate(merchants)]
+                btns = [str(i + 1) for i in range(len(merchants))] + ["🔙 Retour"]
+                return build_response(
+                    f"🏪 *Marchands de {cat.get('nom', '—')}*\n\n" + "\n".join(lignes),
+                    btns
+                )
 
-        lignes = [f"{i + 1}. {_merchant_display_name(m)}" for i, m in enumerate(merchants)]
-        btns = list(session["market_merchants"].keys())[:3] + ["🔙 Retour"]
-        return build_response(
-            f"🏪 Marchands de *{cat.get('nom', '—')}* :\n" + "\n".join(lignes),
-            btns
-        )
+        # Sinon réafficher la liste des catégories (choix invalide)
+        rows = []
+        for k in sorted(cats.keys(), key=lambda x: int(x)):
+            c = cats[k]
+            nom = c.get('nom') or c.get('name') or '—'
+            rows.append({
+                "id": k,
+                "title": nom[:24],
+                "description": f"Catégorie {k}"
+            })
+        msg = "⚠️ Choix invalide. Sélectionnez une catégorie :"
+        return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
 
     # -------- MARCHANDS --------
     if step == "MARKET_MERCHANT":
