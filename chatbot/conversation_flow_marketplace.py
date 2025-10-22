@@ -52,11 +52,8 @@ def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
         session.pop(key, None)
 
 
-def _build_whatsapp_list_response(text: str, rows: List[dict], section_title: str = "Options") -> Dict[str, Any]:
-    """
-    Crée une réponse avec liste WhatsApp native.
-    Compatible avec dispatcher qui reconnaît la clé 'whatsapp_list'
-    """
+def _build_list_response(text: str, rows: List[dict], section_title: str = "Options") -> Dict[str, Any]:
+    """Crée une réponse avec liste WhatsApp native."""
     resp = build_response(text)
     resp["whatsapp_list"] = {
         "rows": rows,
@@ -178,11 +175,20 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
             MAIN_MENU_BTNS
         )
 
+
+def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
+    cats = _load_categories(session)
+    if not cats:
+        session["step"] = "MENU"
+        return build_response(
+            "🛍️ Marketplace indisponible pour l'instant (aucune catégorie).",
+            MAIN_MENU_BTNS
+        )
+
     session["market_categories"] = {str(i + 1): c for i, c in enumerate(cats)}
-    session["market_cat_page"] = 1
     session["step"] = "MARKET_CATEGORY"
 
-    # Construire la liste WhatsApp avec TOUTES les catégories
+    # Construire la liste WhatsApp
     rows = []
     for k in sorted(session["market_categories"].keys(), key=lambda x: int(x)):
         cat = session["market_categories"][k]
@@ -193,8 +199,15 @@ def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
             "description": f"Catégorie {k}"
         })
 
+    # Ajouter le bouton Retour à la fin
+    rows.append({
+        "id": "retour",
+        "title": "🔙 Retour",
+        "description": "Revenir au menu"
+    })
+
     msg = "🛍️ *Sélectionnez une catégorie*"
-    return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
+    return _build_list_response(msg, rows, section_title="Catégories")
 
 
 def _merchant_display_name(ent: Dict[str, Any]) -> str:
@@ -324,30 +337,32 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
                         "title": nom[:24],
                         "description": f"Catégorie {k}"
                     })
-                msg = f"❌ Aucun marchand pour la catégorie *{cat.get('nom', '—')}*.\n\nChoisissez une autre :"
-                return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
+                rows.append({
+                    "id": "retour",
+                    "title": "🔙 Retour",
+                    "description": "Revenir au menu"
+                })
+                msg = f"❌ Aucun marchand pour *{cat.get('nom', '—')}*.\n\nChoisissez une autre catégorie :"
+                return _build_list_response(msg, rows, section_title="Catégories")
 
             session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
             session["step"] = "MARKET_MERCHANT"
 
-            # Afficher les marchands en liste si > 3, sinon en boutons
-            if len(merchants) > 3:
-                rows = []
-                for i, m in enumerate(merchants, start=1):
-                    rows.append({
-                        "id": str(i),
-                        "title": _merchant_display_name(m)[:24],
-                        "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
-                    })
-                msg = f"🏪 *Marchands de {cat.get('nom', '—')}*"
-                return _build_whatsapp_list_response(msg, rows, section_title="Marchands")
-            else:
-                lignes = [f"  {i + 1}. {_merchant_display_name(m)}" for i, m in enumerate(merchants)]
-                btns = [str(i + 1) for i in range(len(merchants))] + ["🔙 Retour"]
-                return build_response(
-                    f"🏪 *Marchands de {cat.get('nom', '—')}*\n\n" + "\n".join(lignes),
-                    btns
-                )
+            # Afficher les marchands en liste
+            rows = []
+            for i, m in enumerate(merchants, start=1):
+                rows.append({
+                    "id": str(i),
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = f"🏪 *Marchands de {cat.get('nom', '—')}*"
+            return _build_list_response(msg, rows, section_title="Marchands")
 
         # Sinon réafficher la liste des catégories (choix invalide)
         rows = []
@@ -359,8 +374,13 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
                 "title": nom[:24],
                 "description": f"Catégorie {k}"
             })
+        rows.append({
+            "id": "retour",
+            "title": "🔙 Retour",
+            "description": "Revenir au menu"
+        })
         msg = "⚠️ Choix invalide. Sélectionnez une catégorie :"
-        return _build_whatsapp_list_response(msg, rows, section_title="Catégories")
+        return _build_list_response(msg, rows, section_title="Catégories")
 
     # -------- MARCHANDS --------
     if step == "MARKET_MERCHANT":
@@ -370,42 +390,83 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
         if _is_retour(text):
             session["step"] = "MARKET_CATEGORY"
             cats = session.get("market_categories", {})
-            btns = list(cats.keys())[:3] + ["🔙 Retour"]
-            return build_response("🔙 Choisissez une autre catégorie :", btns)
+            rows = []
+            for k in sorted(cats.keys(), key=lambda x: int(x)):
+                c = cats[k]
+                nom = c.get('nom') or c.get('name') or '—'
+                rows.append({
+                    "id": k,
+                    "title": nom[:24],
+                    "description": f"Catégorie {k}"
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir au menu"
+            })
+            msg = "🔙 *Sélectionnez une autre catégorie*"
+            return _build_list_response(msg, rows, section_title="Catégories")
 
         if t not in merchants:
-            btns = list(merchants.keys())[:3] + ["🔙 Retour"]
-            return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* du marchand.", btns)
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = "⚠️ Choix invalide. Sélectionnez un marchand :"
+            return _build_list_response(msg, rows, section_title="Marchands")
 
         merchant = merchants[t]
-        session["market_merchant"] = merchant
+        session["merchant"] = merchant
         produits = _load_products_by_category(session, merchant.get("id"))
 
         if not produits:
             session["step"] = "MARKET_MERCHANT"
-            btns = list(merchants.keys())[:3] + ["🔙 Retour"]
-            return build_response(
-                f"❌ Aucun produit disponible chez {_merchant_display_name(merchant)}.",
-                btns
-            )
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = f"❌ Aucun produit disponible chez {_merchant_display_name(merchant)}."
+            return _build_list_response(msg, rows, section_title="Marchands")
 
-        produits = produits[:5]
+        produits = produits[:10]
         session["market_products"] = {str(i + 1): p for i, p in enumerate(produits)}
-        lignes = []
+        session["market_merchant"] = merchant
+        session["step"] = "MARKET_PRODUCTS"
+
+        rows = []
         for i, p in enumerate(produits, start=1):
             nom = p.get("nom", "—")
             prix = _fmt_fcfa(p.get("prix", 0))
-            ligne = f"{i}. {nom} — {prix} FCFA"
-            if p.get("image"):
-                ligne += f"\n🖼️ {p['image']}"
-            lignes.append(ligne)
-
-        btns = list(session["market_products"].keys())[:3] + ["🔙 Retour"]
-        return build_response(
-            f"📦 Produits de *{_merchant_display_name(merchant)}* :\n" + "\n".join(lignes) +
-            "\n\nRépondez par le *numéro* ou *Retour*.",
-            btns
-        )
+            rows.append({
+                "id": str(i),
+                "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {i}",
+                "description": p.get("description", "")[:60] if p.get("description") else ""
+            })
+        rows.append({
+            "id": "retour",
+            "title": "🔙 Retour",
+            "description": "Revenir aux marchands"
+        })
+        msg = f"📦 *Produits de {_merchant_display_name(merchant)}*"
+        return _build_list_response(msg, rows, section_title="Produits")
 
     # -------- PRODUITS --------
     if step == "MARKET_PRODUCTS":
@@ -415,12 +476,40 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
         if _is_retour(text):
             session["step"] = "MARKET_MERCHANT"
             merchants = session.get("market_merchants", {})
-            btns = list(merchants.keys())[:3] + ["🔙 Retour"]
-            return build_response("🔙 Choisissez un autre marchand :", btns)
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = "🔙 *Sélectionnez un autre marchand*"
+            return _build_list_response(msg, rows, section_title="Marchands")
 
         if t not in produits:
-            btns = list(produits.keys())[:3] + ["🔙 Retour"]
-            return build_response("⚠️ Choix invalide. Sélectionnez le *numéro* du produit.", btns)
+            rows = []
+            for k in sorted(produits.keys(), key=lambda x: int(x)):
+                p = produits[k]
+                nom = p.get("nom", "—")
+                prix = _fmt_fcfa(p.get("prix", 0))
+                rows.append({
+                    "id": k,
+                    "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
+                    "description": p.get("description", "")[:60] if p.get("description") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux marchands"
+            })
+            msg = "⚠️ Choix invalide. Sélectionnez un produit :"
+            return _build_list_response(msg, rows, section_title="Produits")
 
         produit = produits[t]
         session["selected_product"] = produit
