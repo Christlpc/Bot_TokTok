@@ -23,6 +23,29 @@ def _fmt_fcfa(n: Any) -> str:
         return str(n)
 
 
+def _truncate_title(text: str, max_len: int = 24) -> str:
+    """Tronque un titre pour WhatsApp (max 24 chars) - FIX BUG #131009"""
+    if not text:
+        return "—"
+    text = str(text).strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len-1] + "…"
+
+
+def _build_product_title(nom: str, prix: str) -> str:
+    """Construit un titre produit qui respecte les limites WhatsApp (24 chars)"""
+    if not nom:
+        nom = "Produit"
+    prix_str = f"{prix} FCFA"
+    separateur = " - "
+    # Calculer l'espace disponible pour le nom
+    max_nom_length = max(8, 24 - len(prix_str) - len(separateur))
+    title = f"{nom[:max_nom_length]} - {prix_str}"
+    # Double sécurité: tronquer à 24
+    return title[:24]
+
+
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
     tok = (session.get("auth") or {}).get("access")
     return {"Authorization": f"Bearer {tok}"} if tok else {}
@@ -293,7 +316,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             m = merchants_indexed[k]
             rows.append({
                 "id": k,
-                "title": _merchant_display_name(m)[:24],
+                "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
                 "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
             })
 
@@ -353,7 +376,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 m = merchants[k]
                 rows.append({
                     "id": k,
-                    "title": _merchant_display_name(m)[:24],
+                    "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
                     "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
                 })
             msg = f"❌ Aucun produit."
@@ -367,9 +390,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         for i, p in enumerate(produits, start=1):
             nom = p.get("nom", "—")
             prix = _fmt_fcfa(p.get("prix", 0))
+            # FIX: Utiliser _build_product_title pour respecter la limite de 24 chars WhatsApp
+            title = _build_product_title(nom, prix)
             rows.append({
                 "id": str(i),
-                "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {i}",
+                "title": title,
                 "description": p.get("description", "")[:60] if p.get("description") else ""
             })
 
@@ -388,7 +413,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 m = merchants[k]
                 rows.append({
                     "id": k,
-                    "title": _merchant_display_name(m)[:24],
+                    "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
                     "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
                 })
             msg = "🔙 *Marchands*"
@@ -413,9 +438,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                     p = produits[k]
                     nom = p.get("nom", "—")
                     prix = _fmt_fcfa(p.get("prix", 0))
+                    # FIX: Utiliser _build_product_title pour respecter la limite WhatsApp
+                    title = _build_product_title(nom, prix)
                     rows.append({
                         "id": k,
-                        "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
+                        "title": title,
                         "description": p.get("description", "")[:60] if p.get("description") else ""
                     })
                 msg = "⚠️ Choix invalide."
@@ -447,9 +474,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 p = produits[k]
                 nom = p.get("nom", "—")
                 prix = _fmt_fcfa(p.get("prix", 0))
+                # FIX: Utiliser _build_product_title pour respecter la limite WhatsApp
+                title = _build_product_title(nom, prix)
                 rows.append({
                     "id": k,
-                    "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
+                    "title": title,
                     "description": p.get("description", "")[:60] if p.get("description") else ""
                 })
             msg = "🔙 *Produits*"
