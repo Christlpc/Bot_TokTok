@@ -1,5 +1,6 @@
 # chatbot/conversation_flow_marketplace.py
-# VERSION FINALE CORRIGÉE - Tous les bugs fixes appliqués
+# VERSION CORRIGÉE - TOUS LES BUGS + UX/UI AMÉLIORÉ
+
 from __future__ import annotations
 import os, logging, requests, re
 from typing import Dict, Any, Optional, List, Tuple
@@ -16,7 +17,7 @@ MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 # ==================== CONSTANTS ====================
 PAYMENT_METHODS = {
     # Espèces variants
-    "espèces": "espèces",
+    "especes": "espèces",  # ← SANS ACCENTS dans les clés
     "cash": "espèces",
     "1": "espèces",
 
@@ -27,7 +28,7 @@ PAYMENT_METHODS = {
     "2": "mobile_money",
 
     # Virement variants
-    "virement": "virement",
+    "virement": "virement",  # ← SANS ACCENTS dans les clés
     "transfer": "virement",
     "bank": "virement",
     "3": "virement",
@@ -35,12 +36,85 @@ PAYMENT_METHODS = {
 
 
 # ==================== HELPERS ====================
+
+# 🔧 BUG FIX #1: Améliorer normalize() pour enlever accents
+def normalize(s: str) -> str:
+    """
+    Normalise un texte pour comparaison.
+    - Supprime les espaces multiples
+    - Convertit en minuscules
+    - Enlève les accents
+    """
+    import unicodedata
+
+    s = " ".join((s or "").split()).strip().lower()
+
+    # Enlever les accents
+    s = ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+    return s
+
+
 def _fmt_fcfa(n: Any) -> str:
     try:
         i = int(float(str(n)))
         return f"{i:,}".replace(",", " ")
     except Exception:
         return str(n)
+
+
+# 🎨 UX/UI FIX: Nouvelle fonction pour affichage optimisé
+def _build_product_display(nom: str, prix: float, description: str = "") -> Tuple[str, str]:
+    """
+    Crée un affichage optimisé pour WhatsApp List.
+
+    Bonnes pratiques UX/UI :
+    - Titre : nom du produit SEUL (lisible, scannable)
+    - Description : prix + info (hiérarchie claire)
+
+    Returns: (title, description_formatted)
+    """
+    if not nom:
+        nom = "Produit"
+
+    # TITRE : Juste le nom, truncate à 20 chars (lisibilité)
+    title = str(nom).strip()
+    if len(title) > 20:
+        title = title[:17] + "…"
+
+    # DESCRIPTION : Prix + info
+    prix_str = f"💰 {_fmt_fcfa(prix)} FCFA"
+
+    # Ajouter la description courte si disponible
+    desc_part = ""
+    if description and description.strip():
+        desc_clean = description.strip()[:40]  # Max 40 chars
+        desc_part = f"\n{desc_clean}"
+
+    description_final = prix_str + desc_part
+
+    return title, description_final
+
+
+def _build_merchant_display(nom: str, raison_sociale: str = "") -> Tuple[str, str]:
+    """Optimise l'affichage des marchands"""
+    if not nom:
+        nom = "Marchand"
+
+    title = str(nom).strip()
+    if len(title) > 22:
+        title = title[:19] + "…"
+
+    description = ""
+    if raison_sociale and raison_sociale.strip():
+        description = str(raison_sociale).strip()[:50]
+    else:
+        description = "Restaurant"
+
+    return title, description
 
 
 def _truncate_title(text: str, max_len: int = 24) -> str:
@@ -51,19 +125,6 @@ def _truncate_title(text: str, max_len: int = 24) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len - 1] + "…"
-
-
-def _build_product_title(nom: str, prix: str) -> str:
-    """Construit un titre produit qui respecte les limites WhatsApp (24 chars)"""
-    if not nom:
-        nom = "Produit"
-    prix_str = f"{prix} FCFA"
-    separateur = " - "
-    # Calculer l'espace disponible pour le nom
-    max_nom_length = max(8, 24 - len(prix_str) - len(separateur))
-    title = f"{nom[:max_nom_length]} - {prix_str}"
-    # Double sécurité: tronquer à 24
-    return title[:24]
 
 
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
@@ -87,7 +148,7 @@ def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
 
 
 def _build_list_response(text: str, rows: List[dict], section_title: str = "Options") -> Dict[str, Any]:
-    """Crée une réponse avec liste WhatsApp native (même format que SIGNUP)"""
+    """Crée une réponse avec liste WhatsApp native"""
     return {
         "response": text,
         "list": {
@@ -199,227 +260,176 @@ def _merchant_display_name(ent: Dict[str, Any]) -> str:
 
 def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
     addr = ent.get("adresse") or ent.get("address") or ent.get("localisation") or _merchant_display_name(ent)
-    lat = ent.get("latitude") or ent.get("lat")
-    lng = ent.get("longitude") or ent.get("lng")
-    coords = f"{lat},{lng}" if (lat is not None and lng is not None) else ""
-    return str(addr), coords
+    phone = ent.get("phone") or ent.get("telephone") or ""
+    return addr, phone
 
 
-# ==================== MARKETPLACE ORDER ====================
 def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Crée la commande via l'API"""
     try:
-        d = session.get("new_request", {})
+        req_data = session.get("new_request", {})
         merchant = session.get("market_merchant", {})
-        produit = session.get("selected_product", {})
 
         payload = {
-            "entreprise": int(merchant.get("id", 0)),
-            "adresse_livraison": d.get("depart") or "Adresse non précisée",
-            "coordonnees_gps": d.get("coordonnees_gps") or "0,0",
-            "notes_client": d.get("description") or "",
-            "details": [{
-                "produit": int(produit.get("id", 0)),
-                "quantite": 1,
-                "prix_unitaire": float(produit.get("prix", 0)),
-            }],
-            "status": "en_attente",
+            "market_choice": req_data.get("market_choice"),
+            "description": req_data.get("description"),
+            "value_fcfa": req_data.get("value_fcfa"),
+            "payment_method": req_data.get("payment_method"),
+            "depart": req_data.get("depart"),
+            "coordonnees_gps": req_data.get("coordonnees_gps"),
         }
 
-        pay_method = d.get("payment_method", "espèces")
-        payload["mode_paiement"] = pay_method
-
-        r = api_request(session, "POST", "/api/v1/marketplace/commandes/", json=payload)
+        r = api_request(session, "POST", "/api/v1/marketplace/orders/", json=payload)
 
         if r.ok:
-            order_data = r.json()
-            order_id = order_data.get("id", "N/A")
+            order = r.json()
             _cleanup_marketplace_session(session)
             session["step"] = "MENU"
-
-            recap = (
-                "✅ *Commande créée avec succès* !\n\n"
-                f"Numéro : *{order_id}*\n"
-                f"Marchand : {_merchant_display_name(merchant)}\n"
-                f"Livraison : {d.get('depart', '—')}\n"
-                f"Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
+            return build_response(
+                f"✅ Commande créée !\n"
+                f"Numéro : {order.get('id', '—')}\n"
+                f"Suivi : /track/{order.get('id', '')}",
+                MAIN_MENU_BTNS
             )
-            return build_response(recap, MAIN_MENU_BTNS)
+        else:
+            logger.error(f"[MARKET] order creation failed: {r.status_code}")
+            return build_response("❌ Erreur lors de la création.", MAIN_MENU_BTNS)
+
     except Exception as e:
-        logger.error(f"[MARKET] create_order failed: {e}")
-
-    _cleanup_marketplace_session(session)
-    session["step"] = "MENU"
-    return build_response("❌ Erreur lors de la création.", MAIN_MENU_BTNS)
+        logger.error(f"[MARKET] create_order exception: {e}")
+        return build_response("❌ Erreur lors de la création.", MAIN_MENU_BTNS)
 
 
+# ==================== FLOW PRINCIPAL ====================
 def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        categories = _load_categories(session)
-        if not categories:
-            session["step"] = "MENU"
-            return build_response("❌ Pas de catégories disponibles.", MAIN_MENU_BTNS)
+    """Initialise le flow marketplace"""
+    categories = _load_categories(session)
 
-        session["market_categories"] = {str(i): c for i, c in enumerate(categories)}
-        session["step"] = "MARKET_CATEGORY"
+    if not categories:
+        return build_response("❌ Marketplace indisponible.", MAIN_MENU_BTNS)
 
-        rows = []
-        for idx, cat in enumerate(categories):
-            nom = cat.get("nom") or cat.get("name", "—")
-            rows.append({
-                "id": str(idx),
-                "title": nom[:30]
-            })
+    session["market_categories"] = {str(i + 1): c for i, c in enumerate(categories)}
+    session["step"] = "MARKET_CATEGORY"
 
-        return _build_list_response("🛍️ *Sélectionnez une catégorie*", rows, section_title="Catégories")
-    except Exception as e:
-        logger.error(f"[MARKET] begin failed: {e}")
-        session["step"] = "MENU"
-        return build_response("❌ Erreur Marketplace.", MAIN_MENU_BTNS)
+    rows = []
+    for i, cat in enumerate(categories, start=1):
+        nom = cat.get("nom") or cat.get("name") or "—"
+        rows.append({
+            "id": str(i),
+            "title": _truncate_title(nom, 22),
+            "description": cat.get("description", "")[:50] if cat.get("description") else ""
+        })
+
+    return _build_list_response("🛍️ *Catégories*", rows, section_title="Catégories")
 
 
 def flow_marketplace_handle(session: Dict[str, Any], text: str,
                             *, lat: Optional[float] = None,
                             lng: Optional[float] = None) -> Dict[str, Any]:
-    step = session.get("step", "MARKET_CATEGORY")
+    """Gère le flow marketplace"""
+
+    step = session.get("step", "MENU")
     t = normalize(text) if text else ""
 
     # ========== CATÉGORIES ==========
     if step == "MARKET_CATEGORY":
         categories = session.get("market_categories", {})
 
-        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
-        category_name_to_id = {}
-        for idx, cat in categories.items():
-            cat_name = normalize(cat.get("nom") or cat.get("name") or "")
-            if cat_name:
-                category_name_to_id[cat_name] = idx
-
-        # Chercher d'abord par indice direct
         if t not in categories:
-            # Ensuite par nom de catégorie (depuis bouton interactif)
-            if t in category_name_to_id:
-                t = category_name_to_id[t]
-            else:
-                # Vraiment invalide
-                rows = []
-                for k in sorted(categories.keys(), key=lambda x: int(x)):
-                    cat = categories[k]
-                    rows.append({
-                        "id": k,
-                        "title": (cat.get("nom") or cat.get("name", ""))[:30]
-                    })
-                msg = "⚠️ Choix invalide."
-                return _build_list_response(msg, rows, section_title="Catégories")
+            rows = []
+            for i, cat in enumerate(categories.values(), start=1):
+                nom = cat.get("nom") or cat.get("name") or "—"
+                rows.append({
+                    "id": str(i),
+                    "title": _truncate_title(nom, 22),
+                    "description": cat.get("description", "")[:50] if cat.get("description") else ""
+                })
+            return _build_list_response("⚠️ Choix invalide.", rows, section_title="Catégories")
 
         category = categories[t]
-        merchants = _load_merchants_by_category(session, category)
-
-        if not merchants:
-            rows = []
-            for k in sorted(categories.keys(), key=lambda x: int(x)):
-                cat = categories[k]
-                rows.append({
-                    "id": k,
-                    "title": (cat.get("nom") or cat.get("name", ""))[:30]
-                })
-            cat_name = category.get("nom") or category.get("name", "Catégorie")
-            msg = f"❌ Aucun marchand pour *{cat_name}*."
-            return _build_list_response(msg, rows, section_title="Catégories")
-
-        merchants_indexed = {str(i): m for i, m in enumerate(merchants)}
-        session["market_merchants"] = merchants_indexed
         session["market_category"] = category
+
+        merchants = _load_merchants_by_category(session, category)
+        if not merchants:
+            return build_response("❌ Pas de marchands.", MAIN_MENU_BTNS)
+
+        session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
         session["step"] = "MARKET_MERCHANT"
 
         rows = []
-        for k in sorted(merchants_indexed.keys(), key=lambda x: int(x)):
-            m = merchants_indexed[k]
+        for k in sorted(session["market_merchants"].keys(), key=lambda x: int(x)):
+            m = session["market_merchants"][k]
+            # 🎨 UX/UI: Utiliser la nouvelle fonction
+            title, description = _build_merchant_display(
+                _merchant_display_name(m),
+                m.get("raison_sociale", "")
+            )
             rows.append({
                 "id": k,
-                "title": _truncate_title(_merchant_display_name(m), 24),
-                "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                "title": title,
+                "description": description
             })
 
-        cat_name = category.get("nom") or category.get("name", "Catégorie")
-        msg = f"🏪 *Marchands de {cat_name}*"
-        return _build_list_response(msg, rows, section_title="Marchands")
+        return _build_list_response("🏪 *Marchands*", rows, section_title="Marchands")
 
     # ========== MARCHANDS ==========
     if step == "MARKET_MERCHANT":
+        merchants = session.get("market_merchants", {})
+
         if _is_retour(text):
             session["step"] = "MARKET_CATEGORY"
             categories = session.get("market_categories", {})
             rows = []
-            for k in sorted(categories.keys(), key=lambda x: int(x)):
-                cat = categories[k]
+            for i, cat in enumerate(categories.values(), start=1):
+                nom = cat.get("nom") or cat.get("name") or "—"
                 rows.append({
-                    "id": k,
-                    "title": (cat.get("nom") or cat.get("name", ""))[:30]
+                    "id": str(i),
+                    "title": _truncate_title(nom, 22),
+                    "description": cat.get("description", "")[:50] if cat.get("description") else ""
                 })
-            msg = "🔙 *Catégories*"
-            return _build_list_response(msg, rows, section_title="Catégories")
+            return _build_list_response("🔙 *Catégories*", rows, section_title="Catégories")
 
-        merchants = session.get("market_merchants", {})
-
-        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
-        merchant_name_to_id = {}
-        for idx, merch in merchants.items():
-            merch_name = normalize(_merchant_display_name(merch))
-            if merch_name:
-                merchant_name_to_id[merch_name] = idx
-
-        # Chercher d'abord par indice direct
         if t not in merchants:
-            # Ensuite par nom du marchand
-            if t in merchant_name_to_id:
-                t = merchant_name_to_id[t]
-            else:
-                # Vraiment invalide
-                rows = []
-                for k in sorted(merchants.keys(), key=lambda x: int(x)):
-                    m = merchants[k]
-                    rows.append({
-                        "id": k,
-                        "title": _truncate_title(_merchant_display_name(m), 24),
-                        "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
-                    })
-                msg = "⚠️ Choix invalide."
-                return _build_list_response(msg, rows, section_title="Marchands")
-
-        merchant = merchants[t]
-        session["market_merchant"] = merchant
-        produits = _load_products_by_category(session, merchant.get("id"))
-
-        if not produits:
             rows = []
             for k in sorted(merchants.keys(), key=lambda x: int(x)):
                 m = merchants[k]
+                title, description = _build_merchant_display(
+                    _merchant_display_name(m),
+                    m.get("raison_sociale", "")
+                )
                 rows.append({
                     "id": k,
-                    "title": _truncate_title(_merchant_display_name(m), 24),
-                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                    "title": title,
+                    "description": description
                 })
-            msg = f"❌ Aucun produit."
-            return _build_list_response(msg, rows, section_title="Marchands")
+            return _build_list_response("⚠️ Choix invalide.", rows, section_title="Marchands")
 
-        produits = produits[:10]
+        merchant = merchants[t]
+        session["market_merchant"] = merchant
+
+        produits = _load_products_by_category(session, merchant.get("id") or merchant.get("pk"))
+        if not produits:
+            return build_response("❌ Pas de produits.", MAIN_MENU_BTNS)
+
         session["market_products"] = {str(i + 1): p for i, p in enumerate(produits)}
         session["step"] = "MARKET_PRODUCTS"
 
         rows = []
         for i, p in enumerate(produits, start=1):
-            nom = p.get("nom", "—")
-            prix = _fmt_fcfa(p.get("prix", 0))
-            # FIX #2: Utiliser _build_product_title pour respecter la limite de 24 chars WhatsApp
-            title = _build_product_title(nom, prix)
+            # 🎨 UX/UI: Utiliser la nouvelle fonction
+            title, description = _build_product_display(
+                nom=p.get("nom", "—"),
+                prix=p.get("prix", 0),
+                description=p.get("description", "")
+            )
             rows.append({
                 "id": str(i),
                 "title": title,
-                "description": p.get("description", "")[:60] if p.get("description") else ""
+                "description": description
             })
 
         msg = f"📦 *Produits de {_merchant_display_name(merchant)}*"
-        return _build_list_response(msg, rows, section_title="Produits")
+        return _build_list_response(msg, rows, section_title="Produits disponibles")
 
     # ========== PRODUITS ==========
     if step == "MARKET_PRODUCTS":
@@ -431,42 +441,49 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             rows = []
             for k in sorted(merchants.keys(), key=lambda x: int(x)):
                 m = merchants[k]
+                title, description = _build_merchant_display(
+                    _merchant_display_name(m),
+                    m.get("raison_sociale", "")
+                )
                 rows.append({
                     "id": k,
-                    "title": _truncate_title(_merchant_display_name(m), 24),
-                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                    "title": title,
+                    "description": description
                 })
-            msg = "🔙 *Marchands*"
-            return _build_list_response(msg, rows, section_title="Marchands")
+            return _build_list_response("🔙 *Marchands*", rows, section_title="Marchands")
 
-        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
+        # BUG FIX #2: Créer un mapping texte → indice avec normalize()
         product_name_to_id = {}
         for idx, prod in produits.items():
             prod_name = normalize(prod.get("nom") or "")
             if prod_name:
                 product_name_to_id[prod_name] = idx
 
-        # Chercher d'abord par indice direct
+        # BUG FIX #3: Extraire le nom si c'est au format "NOM - PRIX FCFA"
+        if " - " in text and "FCFA" in text:
+            text = text.rsplit(" - ", 1)[0]  # Prendre avant le dernier " - "
+
+        # Chercher par indice direct
         if t not in produits:
-            # Ensuite par nom du produit
-            if normalize(t) in product_name_to_id:  # ← Ajouter normalize()
-                t = product_name_to_id[normalize(t)]
+            # BUG FIX #2: Chercher par nom avec normalize()
+            if t in product_name_to_id:
+                t = product_name_to_id[t]
             else:
-                # Vraiment invalide
+                # Invalide
                 rows = []
                 for k in sorted(produits.keys(), key=lambda x: int(x)):
                     p = produits[k]
-                    nom = p.get("nom", "—")
-                    prix = _fmt_fcfa(p.get("prix", 0))
-                    # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
-                    title = _build_product_title(nom, prix)
+                    title, description = _build_product_display(
+                        nom=p.get("nom", "—"),
+                        prix=p.get("prix", 0),
+                        description=p.get("description", "")
+                    )
                     rows.append({
                         "id": k,
                         "title": title,
-                        "description": p.get("description", "")[:60] if p.get("description") else ""
+                        "description": description
                     })
-                msg = "⚠️ Choix invalide."
-                return _build_list_response(msg, rows, section_title="Produits")
+                return _build_list_response("⚠️ Choix invalide.", rows, section_title="Produits")
 
         produit = produits[t]
         session["selected_product"] = produit
@@ -492,17 +509,17 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             rows = []
             for k in sorted(produits.keys(), key=lambda x: int(x)):
                 p = produits[k]
-                nom = p.get("nom", "—")
-                prix = _fmt_fcfa(p.get("prix", 0))
-                # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
-                title = _build_product_title(nom, prix)
+                title, description = _build_product_display(
+                    nom=p.get("nom", "—"),
+                    prix=p.get("prix", 0),
+                    description=p.get("description", "")
+                )
                 rows.append({
                     "id": k,
                     "title": title,
-                    "description": p.get("description", "")[:60] if p.get("description") else ""
+                    "description": description
                 })
-            msg = "🔙 *Produits*"
-            return _build_list_response(msg, rows, section_title="Produits")
+            return _build_list_response("🔙 *Produits*", rows, section_title="Produits disponibles")
 
         if lat is not None and lng is not None:
             session.setdefault("new_request", {})
@@ -529,7 +546,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             resp["ask_location"] = True
             return resp
 
-        # FIX #3: Utiliser PAYMENT_METHODS avec normalize()
+        # BUG FIX #1: Utiliser normalize() pour comparer avec PAYMENT_METHODS
         key = normalize(text)
         if key not in PAYMENT_METHODS:
             return build_response("🙏 Choix invalide. Choisissez:",
@@ -544,7 +561,6 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         pickup_addr, _ = _merchant_pickup_info(merchant)
         prix = _fmt_fcfa(d.get("value_fcfa", 0))
 
-        # FIX #3: Utiliser PAYMENT_METHODS pour afficher le label correct
         payment_label = "Espèces" if payment_method == "espèces" else \
             "Mobile Money" if payment_method == "mobile_money" else \
                 "Virement"
@@ -566,7 +582,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             return build_response("💳 Mode de paiement :",
                                   ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
 
-        # FIX #4: Vérifier la confirmation EN PREMIER avec tous les variants
+        # BUG FIX #1: Utiliser normalize() pour tous les textes
         t_lower = normalize(text)
 
         # Confirmer l'ordre
@@ -585,7 +601,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             session["step"] = "MENU"
             return build_response("✅ Commande annulée.", MAIN_MENU_BTNS)
 
-        # Fallback - aucune option reconnue
+        # Fallback
         return build_response("👉 Merci de choisir une option.",
                               ["Confirmer", "Modifier", "Annuler", "🔙 Retour"])
 
