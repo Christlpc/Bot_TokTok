@@ -1,5 +1,5 @@
 # chatbot/conversation_flow_marketplace.py
-# VERSION CORRIGÉE - Les bugs du mapping bouton/indice sont fixés
+# VERSION FINALE CORRIGÉE - Tous les bugs fixes appliqués
 from __future__ import annotations
 import os, logging, requests, re
 from typing import Dict, Any, Optional, List, Tuple
@@ -12,6 +12,26 @@ API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 
 MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
+
+# ==================== CONSTANTS ====================
+PAYMENT_METHODS = {
+    # Espèces variants
+    "espèces": "espèces",
+    "cash": "espèces",
+    "1": "espèces",
+
+    # Mobile Money variants
+    "mobile money": "mobile_money",
+    "mobile": "mobile_money",
+    "mtn": "mobile_money",
+    "2": "mobile_money",
+
+    # Virement variants
+    "virement": "virement",
+    "transfer": "virement",
+    "bank": "virement",
+    "3": "virement",
+}
 
 
 # ==================== HELPERS ====================
@@ -30,7 +50,7 @@ def _truncate_title(text: str, max_len: int = 24) -> str:
     text = str(text).strip()
     if len(text) <= max_len:
         return text
-    return text[:max_len-1] + "…"
+    return text[:max_len - 1] + "…"
 
 
 def _build_product_title(nom: str, prix: str) -> str:
@@ -267,11 +287,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     if step == "MARKET_CATEGORY":
         categories = session.get("market_categories", {})
 
-        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         category_name_to_id = {}
         for idx, cat in categories.items():
             cat_name = normalize(cat.get("nom") or cat.get("name") or "")
-            if cat_name:  # Seulement si le nom normalisé n'est pas vide
+            if cat_name:
                 category_name_to_id[cat_name] = idx
 
         # Chercher d'abord par indice direct
@@ -316,7 +336,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             m = merchants_indexed[k]
             rows.append({
                 "id": k,
-                "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
+                "title": _truncate_title(_merchant_display_name(m), 24),
                 "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
             })
 
@@ -341,7 +361,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         merchants = session.get("market_merchants", {})
 
-        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         merchant_name_to_id = {}
         for idx, merch in merchants.items():
             merch_name = normalize(_merchant_display_name(merch))
@@ -360,7 +380,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                     m = merchants[k]
                     rows.append({
                         "id": k,
-                        "title": _merchant_display_name(m)[:24],
+                        "title": _truncate_title(_merchant_display_name(m), 24),
                         "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
                     })
                 msg = "⚠️ Choix invalide."
@@ -376,7 +396,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 m = merchants[k]
                 rows.append({
                     "id": k,
-                    "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
+                    "title": _truncate_title(_merchant_display_name(m), 24),
                     "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
                 })
             msg = f"❌ Aucun produit."
@@ -390,7 +410,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         for i, p in enumerate(produits, start=1):
             nom = p.get("nom", "—")
             prix = _fmt_fcfa(p.get("prix", 0))
-            # FIX: Utiliser _build_product_title pour respecter la limite de 24 chars WhatsApp
+            # FIX #2: Utiliser _build_product_title pour respecter la limite de 24 chars WhatsApp
             title = _build_product_title(nom, prix)
             rows.append({
                 "id": str(i),
@@ -413,13 +433,13 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 m = merchants[k]
                 rows.append({
                     "id": k,
-                    "title": _truncate_title(_merchant_display_name(m), 24),  # FIX: Limiter à 24 chars
+                    "title": _truncate_title(_merchant_display_name(m), 24),
                     "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
                 })
             msg = "🔙 *Marchands*"
             return _build_list_response(msg, rows, section_title="Marchands")
 
-        # FIX: Créer un mapping texte → indice pour les boutons interactifs
+        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         product_name_to_id = {}
         for idx, prod in produits.items():
             prod_name = normalize(prod.get("nom") or "")
@@ -438,7 +458,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                     p = produits[k]
                     nom = p.get("nom", "—")
                     prix = _fmt_fcfa(p.get("prix", 0))
-                    # FIX: Utiliser _build_product_title pour respecter la limite WhatsApp
+                    # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
                     title = _build_product_title(nom, prix)
                     rows.append({
                         "id": k,
@@ -474,7 +494,7 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 p = produits[k]
                 nom = p.get("nom", "—")
                 prix = _fmt_fcfa(p.get("prix", 0))
-                # FIX: Utiliser _build_product_title pour respecter la limite WhatsApp
+                # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
                 title = _build_product_title(nom, prix)
                 rows.append({
                     "id": k,
@@ -509,17 +529,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             resp["ask_location"] = True
             return resp
 
-        mapping = {
-            "espèces": "espèces", "1": "espèces",
-            "mobile money": "mobile_money", "2": "mobile_money",
-            "virement": "virement", "3": "virement",
-        }
-        key = t.strip()
-        if key not in mapping:
-            return build_response("🙏 Choix invalide.",
+        # FIX #3: Utiliser PAYMENT_METHODS avec normalize()
+        key = normalize(text)
+        if key not in PAYMENT_METHODS:
+            return build_response("🙏 Choix invalide. Choisissez:",
                                   ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
 
-        session.setdefault("new_request", {})["payment_method"] = mapping[key]
+        payment_method = PAYMENT_METHODS[key]
+        session.setdefault("new_request", {})["payment_method"] = payment_method
         session["step"] = "MARKET_CONFIRM"
 
         d = session["new_request"]
@@ -527,13 +544,18 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         pickup_addr, _ = _merchant_pickup_info(merchant)
         prix = _fmt_fcfa(d.get("value_fcfa", 0))
 
+        # FIX #3: Utiliser PAYMENT_METHODS pour afficher le label correct
+        payment_label = "Espèces" if payment_method == "espèces" else \
+            "Mobile Money" if payment_method == "mobile_money" else \
+                "Virement"
+
         recap = (
             "📝 *Récapitulatif*\n"
             f"• Marchand : {_merchant_display_name(merchant)}\n"
             f"• Retrait : {pickup_addr}\n"
             f"• Livraison : {d.get('depart', '—')}\n"
             f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
-            f"• Paiement : {mapping[key]}"
+            f"• Paiement : {payment_label}"
         )
         return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
@@ -544,20 +566,27 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             return build_response("💳 Mode de paiement :",
                                   ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
 
-        if t in {"confirmer", "oui"}:
+        # FIX #4: Vérifier la confirmation EN PREMIER avec tous les variants
+        t_lower = normalize(text)
+
+        # Confirmer l'ordre
+        if t_lower in {"confirmer", "oui", "valider", "ok", "yes", "1"}:
             return marketplace_create_order(session)
 
-        if t in {"annuler", "non"}:
-            _cleanup_marketplace_session(session)
-            session["step"] = "MENU"
-            return build_response("✅ Annulé.", MAIN_MENU_BTNS)
-
-        if t == "modifier":
+        # Modifier
+        if t_lower in {"modifier", "editer", "change", "changer", "2"}:
             session["step"] = "MARKET_PAY"
             return build_response("💳 Mode de paiement :",
                                   ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
 
-        return build_response("👉 Confirmer / Modifier / Annuler",
+        # Annuler
+        if t_lower in {"annuler", "non", "cancel", "no", "3"}:
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
+            return build_response("✅ Commande annulée.", MAIN_MENU_BTNS)
+
+        # Fallback - aucune option reconnue
+        return build_response("👉 Merci de choisir une option.",
                               ["Confirmer", "Modifier", "Annuler", "🔙 Retour"])
 
     if text:
