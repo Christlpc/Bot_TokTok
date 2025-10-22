@@ -1,208 +1,732 @@
-import os, requests
-from typing import Optional, List
-import mimetypes
+# chatbot/conversation_flow_marketplace.py
+from __future__ import annotations
+import os, logging, requests, re
+from typing import Dict, Any, Optional, List, Tuple
+from .auth_core import get_session, build_response, normalize
+from .conversation_flow import ai_fallback  # réutilise le même fallback
+
+logger = logging.getLogger(__name__)
+
+API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
+TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()  # non utilisé ici
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+
+MAIN_MENU_BTNS = ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
 
 
+# -----------------------------
+# Helpers UI
+# -----------------------------
+def _fmt_fcfa(n: Any) -> str:
+    try:
+        i = int(float(str(n)))
+        return f"{i:,}".replace(",", " ")
+    except Exception:
+        return str(n)
 
 
-ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
-PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-WHATSAPP_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+def _headers(session: Dict[str, Any]) -> Dict[str, str]:
+    tok = (session.get("auth") or {}).get("access")
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
+def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
+    headers = {**_headers(session), **kwargs.pop("headers", {})}
+    url = f"{API_BASE}{path}"
+    r = requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
+    logger.debug(f"[API-M] {method} {path} -> {r.status_code}")
+    return r
 
-def send_whatsapp_message(to, text):
-    """Envoi d’un simple message texte WhatsApp"""
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
+
+# ✅ NOUVELLE FONCTION
+def _cleanup_marketplace_session(session: Dict[str, Any]) -> None:
+    """Nettoie les données de marketplace de la session."""
+    keys_to_clean = [
+        "market_categories", "market_category", "market_merchants",
+        "market_merchant", "market_products", "selected_product",
+        "new_request", "market_cat_page"
+    ]
+    for key in keys_to_clean:
+        session.pop(key, None)
+
+
+def _build_list_response(text: str, rows: List[dict], section_title: str = "Options") -> Dict[str, Any]:
+    """Crée une réponse avec liste WhatsApp native."""
+    resp = build_response(text)
+    resp["whatsapp_list"] = {
+        "rows": rows,
+        "title": section_title
     }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API text:", res.text)
-    return res.json()
+    return resp
 
 
-def send_whatsapp_buttons(to, body_text, buttons):
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+# -----------------------------
+# Data loaders (robustes)
+# -----------------------------
+def _load_categories(session: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    1) Essaie l'endpoint officiel des catégories marketplace
+    2) Si vide / indisponible, infère via les entreprises (champ type_entreprise)
+    """
+    cats: List[Dict[str, Any]] = []
 
-    # Mapping automatique texte → id
-    id_map = {
-        "Confirmer": "btn_confirmer",
-        "Annuler": "btn_annuler",
-        "Cash": "btn_cash",
-        "Mobile Money": "btn_mobile",
-        "Virement": "btn_virement",
-        "Nouvelle demande": "btn_1",
-        "Suivre ma livraison": "btn_2",
-        "Marketplace": "btn_3",
-    }
+    # 1) Endpoint catégories
+    try:
+        r = api_request(session, "GET", "/api/v1/marketplace/categories/")
+        if r.ok:
+            data = r.json()
+            cats = data.get("results", []) if isinstance(data, dict) else (data or [])
+    except Exception as e:
+        logger.warning(f"[MARKET] categories endpoint failed: {e}")
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": body_text},
-            "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": id_map.get(b, b.lower()), "title": b}}
-                    for b in buttons[:3]
-                ]
-            }
+    if cats:
+        return cats
+
+    # 2) Fallback via entreprises -> type_entreprise
+    try:
+        r = api_request(session, "GET", "/api/v1/auth/entreprises/")
+        if r.ok:
+            data = r.json()
+            ents = data.get("results", []) if isinstance(data, dict) else (data or [])
+            tmp = {}
+            for e in ents:
+                te = e.get("type_entreprise")
+                if isinstance(te, dict):
+                    cid = te.get("id") or te.get("pk") or te.get("code") or str(te)
+                    nom = te.get("nom") or te.get("name") or str(te)
+                else:
+                    cid = te if te is not None else str(e.get("id"))
+                    nom = str(te) if te is not None else "Autres"
+                if cid not in tmp:
+                    tmp[cid] = {"id": cid, "nom": nom}
+            cats = list(tmp.values())
+    except Exception as e:
+        logger.error(f"[MARKET] fallback categories via entreprises failed: {e}")
+
+    return cats
+
+
+def _load_merchants_by_category(session: Dict[str, Any], category: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Charge toutes les entreprises puis filtre par category via le champ type_entreprise."""
+    try:
+        r = api_request(session, "GET", "/api/v1/auth/entreprises/")
+        if not r.ok:
+            return []
+        data = r.json()
+        ents = data.get("results", []) if isinstance(data, dict) else (data or [])
+        cid = category.get("id")
+        cnom = (category.get("nom") or category.get("name") or "").strip().lower()
+
+        def _match(ent: Dict[str, Any]) -> bool:
+            te = ent.get("type_entreprise")
+            if isinstance(te, dict):
+                tid = te.get("id") or te.get("pk") or te.get("code") or te.get("slug")
+                tnom = (te.get("nom") or te.get("name") or "").strip().lower()
+                return (cid is not None and (str(tid) == str(cid))) or (cnom and tnom == cnom)
+            if isinstance(te, (str, int)):
+                return (cid is not None and str(te) == str(cid)) or (cnom and str(te).strip().lower() == cnom)
+            return False
+
+        return [e for e in ents if _match(e)]
+    except Exception as e:
+        logger.error(f"[MARKET] load merchants failed: {e}")
+        return []
+
+
+def _load_products_by_category(session: Dict[str, Any], category_id: Any) -> List[Dict[str, Any]]:
+    """
+    Utilise l'endpoint produits par catégorie (si dispo), sinon produits disponibles.
+    """
+    # 1) by_category (corrige le double slash)
+    try:
+        path = f"/api/v1/marketplace/produits/{category_id}/"
+        r = api_request(session, "GET", path)
+        if r.ok:
+            data = r.json()
+            prods = data.get("results", []) if isinstance(data, dict) else (data or [])
+            if prods:
+                return prods
+    except Exception as e:
+        logger.warning(f"[MARKET] produits by_category failed: {e}")
+
+    # 2) disponibles (fallback)
+    try:
+        r = api_request(session, "GET", "/api/v1/marketplace/produits/disponibles/")
+        if r.ok:
+            data = r.json()
+            return data.get("results", []) if isinstance(data, dict) else (data or [])
+    except Exception as e:
+        logger.error(f"[MARKET] produits disponibles failed: {e}")
+
+    return []
+
+
+# -----------------------------
+# Flow utils
+# -----------------------------
+def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
+    cats = _load_categories(session)
+    if not cats:
+        session["step"] = "MENU"
+        return build_response(
+            "🛍️ Marketplace indisponible pour l'instant (aucune catégorie).",
+            MAIN_MENU_BTNS
+        )
+
+
+def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
+    cats = _load_categories(session)
+    if not cats:
+        session["step"] = "MENU"
+        return build_response(
+            "🛍️ Marketplace indisponible pour l'instant (aucune catégorie).",
+            MAIN_MENU_BTNS
+        )
+
+    session["market_categories"] = {str(i + 1): c for i, c in enumerate(cats)}
+    session["step"] = "MARKET_CATEGORY"
+
+    # Construire la liste WhatsApp
+    rows = []
+    for k in sorted(session["market_categories"].keys(), key=lambda x: int(x)):
+        cat = session["market_categories"][k]
+        nom = cat.get('nom') or cat.get('name') or '—'
+        rows.append({
+            "id": k,
+            "title": nom[:24],  # Limite WhatsApp
+            "description": f"Catégorie {k}"
+        })
+
+    # Ajouter le bouton Retour à la fin
+    rows.append({
+        "id": "retour",
+        "title": "🔙 Retour",
+        "description": "Revenir au menu"
+    })
+
+    msg = "🛍️ *Sélectionnez une catégorie*"
+    return _build_list_response(msg, rows, section_title="Catégories")
+
+
+def _merchant_display_name(ent: Dict[str, Any]) -> str:
+    return (
+            ent.get("nom_entreprise")
+            or ent.get("nom")
+            or ent.get("name")
+            or ent.get("display_name")
+            or ent.get("raison_sociale")
+            or "—"
+    )
+
+
+def _merchant_pickup_info(ent: Dict[str, Any]) -> Tuple[str, str]:
+    """Retourne (adresse_recuperation_text, coordonnees_recuperation_str)."""
+    addr = ent.get("adresse") or ent.get("address") or ent.get("localisation") or _merchant_display_name(ent)
+    lat = ent.get("latitude") or ent.get("lat")
+    lng = ent.get("longitude") or ent.get("lng")
+    coords = f"{lat},{lng}" if (lat is not None and lng is not None) else ""
+    return str(addr), coords
+
+
+# -----------------------------
+# Création commande Marketplace
+# -----------------------------
+def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        d = session.get("new_request", {})
+        merchant = session.get("market_merchant", {})
+        produit = session.get("selected_product", {})
+
+        payload = {
+            "entreprise": int(merchant.get("id", 0)),
+            "adresse_livraison": d.get("depart") or "Adresse non précisée",
+            "coordonnees_gps": d.get("coordonnees_gps") or "0,0",
+            "notes_client": d.get("description") or "",
+            "details": [
+                {
+                    "produit": int(produit.get("id", 0)),
+                    "quantite": 1,
+                    "prix_unitaire": float(produit.get("prix", 0)),
+                }
+            ],
+            "status": "en_attente",
         }
-    }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API boutons:", res.text)
-    return res.json()
 
-def send_whatsapp_location_request(to: str, message: str = "📍 Merci de partager votre localisation."):
-    """Demande officielle de localisation (WhatsApp Cloud API)"""
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "location_request_message",
-            "body": {
-                "text": message
-            },
-            "action": {
-                "name": "send_location"
-            }
+        # Mode paiement
+        pay_method = d.get("payment_method", "espèces")
+        payload["mode_paiement"] = pay_method
+
+        # Création via API
+        r = api_request(session, "POST", "/api/v1/marketplace/commandes/", json=payload)
+
+        if r.ok:
+            order_data = r.json()
+            order_id = order_data.get("id", "N/A")
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
+
+            recap = (
+                "✅ *Commande créée avec succès* !\n\n"
+                f"Numéro de commande : *{order_id}*\n"
+                f"Marchand : {_merchant_display_name(merchant)}\n"
+                f"Produit : {d.get('market_choice', '—')}\n"
+                f"Montant : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA\n"
+                f"Mode paiement : {pay_method}\n\n"
+                "Vous pouvez suivre votre commande avec le bouton 'Suivre ma demande'."
+            )
+            return build_response(recap, MAIN_MENU_BTNS)
+        else:
+            error_msg = r.text if r.text else "Erreur de création"
+            logger.error(f"[MARKET] order creation failed: {error_msg}")
+            return build_response(
+                f"❌ Erreur lors de la création de la commande.\n{error_msg}",
+                MAIN_MENU_BTNS
+            )
+
+    except Exception as e:
+        logger.error(f"[MARKET] exception in marketplace_create_order: {e}")
+        return build_response(
+            f"❌ Une erreur s'est produite : {str(e)}",
+            MAIN_MENU_BTNS
+        )
+
+
+def flow_marketplace_handle(session: Dict[str, Any], text: str = "",
+                            lat: Optional[float] = None,
+                            lng: Optional[float] = None) -> Dict[str, Any]:
+    """Gère tout le flux Marketplace."""
+    step = session.get("step", "MENU")
+    t = normalize(text) if text else ""
+
+    # ✅ Helper: Vérifier le retour (avant et après normalize)
+    def _is_retour(txt: str) -> bool:
+        if not txt:
+            return False
+        # Vérifier le texte brut avec emoji
+        if "🔙" in txt or txt.strip().lower().startswith("retour"):
+            return True
+        # Vérifier après normalisation
+        return normalize(txt) == "retour"
+
+    # -------- CATÉGORIES --------
+    if step == "MARKET_CATEGORY":
+        cats = session.get("market_categories", {})
+
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
+            return build_response("✅ Retour au menu principal.", MAIN_MENU_BTNS)
+
+        # ✅ Vérifier si l'utilisateur a sélectionné une catégorie
+        if t in cats:
+            cat = cats[t]
+            session["market_category"] = cat
+            merchants = _load_merchants_by_category(session, cat)
+
+            if not merchants:
+                # Réafficher la liste des catégories
+                rows = []
+                for k in sorted(cats.keys(), key=lambda x: int(x)):
+                    c = cats[k]
+                    nom = c.get('nom') or c.get('name') or '—'
+                    rows.append({
+                        "id": k,
+                        "title": nom[:24],
+                        "description": f"Catégorie {k}"
+                    })
+                rows.append({
+                    "id": "retour",
+                    "title": "🔙 Retour",
+                    "description": "Revenir au menu"
+                })
+                msg = f"❌ Aucun marchand pour *{cat.get('nom', '—')}*.\n\nChoisissez une autre catégorie :"
+                return _build_list_response(msg, rows, section_title="Catégories")
+
+            session["market_merchants"] = {str(i + 1): m for i, m in enumerate(merchants)}
+            session["step"] = "MARKET_MERCHANT"
+
+            # Afficher les marchands en liste
+            rows = []
+            for i, m in enumerate(merchants, start=1):
+                rows.append({
+                    "id": str(i),
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = f"🏪 *Marchands de {cat.get('nom', '—')}*"
+            return _build_list_response(msg, rows, section_title="Marchands")
+
+        # Sinon réafficher la liste des catégories (choix invalide)
+        rows = []
+        for k in sorted(cats.keys(), key=lambda x: int(x)):
+            c = cats[k]
+            nom = c.get('nom') or c.get('name') or '—'
+            rows.append({
+                "id": k,
+                "title": nom[:24],
+                "description": f"Catégorie {k}"
+            })
+        rows.append({
+            "id": "retour",
+            "title": "🔙 Retour",
+            "description": "Revenir au menu"
+        })
+        msg = "⚠️ Choix invalide. Sélectionnez une catégorie :"
+        return _build_list_response(msg, rows, section_title="Catégories")
+
+    # -------- MARCHANDS --------
+    if step == "MARKET_MERCHANT":
+        merchants = session.get("market_merchants", {})
+
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_CATEGORY"
+            cats = session.get("market_categories", {})
+            rows = []
+            for k in sorted(cats.keys(), key=lambda x: int(x)):
+                c = cats[k]
+                nom = c.get('nom') or c.get('name') or '—'
+                rows.append({
+                    "id": k,
+                    "title": nom[:24],
+                    "description": f"Catégorie {k}"
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir au menu"
+            })
+            msg = "🔙 *Sélectionnez une autre catégorie*"
+            return _build_list_response(msg, rows, section_title="Catégories")
+
+        if t not in merchants:
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = "⚠️ Choix invalide. Sélectionnez un marchand :"
+            return _build_list_response(msg, rows, section_title="Marchands")
+
+        merchant = merchants[t]
+        session["merchant"] = merchant
+        produits = _load_products_by_category(session, merchant.get("id"))
+
+        if not produits:
+            session["step"] = "MARKET_MERCHANT"
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = f"❌ Aucun produit disponible chez {_merchant_display_name(merchant)}."
+            return _build_list_response(msg, rows, section_title="Marchands")
+
+        produits = produits[:10]
+        session["market_products"] = {str(i + 1): p for i, p in enumerate(produits)}
+        session["market_merchant"] = merchant
+        session["step"] = "MARKET_PRODUCTS"
+
+        rows = []
+        for i, p in enumerate(produits, start=1):
+            nom = p.get("nom", "—")
+            prix = _fmt_fcfa(p.get("prix", 0))
+            rows.append({
+                "id": str(i),
+                "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {i}",
+                "description": p.get("description", "")[:60] if p.get("description") else ""
+            })
+        rows.append({
+            "id": "retour",
+            "title": "🔙 Retour",
+            "description": "Revenir aux marchands"
+        })
+        msg = f"📦 *Produits de {_merchant_display_name(merchant)}*"
+        return _build_list_response(msg, rows, section_title="Produits")
+
+    # -------- PRODUITS --------
+    if step == "MARKET_PRODUCTS":
+        produits = session.get("market_products", {})
+
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_MERCHANT"
+            merchants = session.get("market_merchants", {})
+            rows = []
+            for k in sorted(merchants.keys(), key=lambda x: int(x)):
+                m = merchants[k]
+                rows.append({
+                    "id": k,
+                    "title": _merchant_display_name(m)[:24],
+                    "description": m.get("raison_sociale", "")[:60] if m.get("raison_sociale") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux catégories"
+            })
+            msg = "🔙 *Sélectionnez un autre marchand*"
+            return _build_list_response(msg, rows, section_title="Marchands")
+
+        if t not in produits:
+            rows = []
+            for k in sorted(produits.keys(), key=lambda x: int(x)):
+                p = produits[k]
+                nom = p.get("nom", "—")
+                prix = _fmt_fcfa(p.get("prix", 0))
+                rows.append({
+                    "id": k,
+                    "title": f"{nom[:20]} - {prix} FCFA" if nom else f"Produit {k}",
+                    "description": p.get("description", "")[:60] if p.get("description") else ""
+                })
+            rows.append({
+                "id": "retour",
+                "title": "🔙 Retour",
+                "description": "Revenir aux marchands"
+            })
+            msg = "⚠️ Choix invalide. Sélectionnez un produit :"
+            return _build_list_response(msg, rows, section_title="Produits")
+
+        produit = produits[t]
+        session["selected_product"] = produit
+        session.setdefault("new_request", {})
+        session["new_request"]["market_choice"] = produit.get("nom")
+        session["new_request"]["description"] = (produit.get("description") or "").strip()
+        session["new_request"]["value_fcfa"] = produit.get("prix", 0)
+        session["step"] = "MARKET_DESTINATION"
+
+        resp = build_response(
+            "📍 Où livrer la commande ?\n"
+            "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
+            "• ou *partagez votre position*.\n"
+            "• Tapez *Retour* pour revenir."
+        )
+        resp["ask_location"] = True
+        return resp
+
+    # -------- DESTINATION (CLIENT) --------
+    if step == "MARKET_DESTINATION":
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_PRODUCTS"
+            produits = session.get("market_products", {})
+            btns = list(produits.keys())[:3] + ["🔙 Retour"]
+            return build_response("🔙 Choisissez un autre produit :", btns)
+
+        if lat is not None and lng is not None:
+            session.setdefault("new_request", {})
+            session["new_request"]["depart"] = "Position actuelle"
+            session["new_request"]["coordonnees_gps"] = f"{lat},{lng}"
+        elif text and t not in {"retour"}:
+            session.setdefault("new_request", {})
+            session["new_request"]["depart"] = text
+            session["new_request"]["coordonnees_gps"] = ""
+        else:
+            resp = build_response(
+                "⚠️ J'ai besoin d'une adresse ou de votre position pour livrer.\n(Tapez *Retour* pour revenir.)")
+            resp["ask_location"] = True
+            return resp
+
+        session["step"] = "MARKET_PAY"
+        return build_response(
+            "💳 Choisissez un mode de paiement :",
+            ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
+        )
+
+    # -------- PAIEMENT --------
+    if step == "MARKET_PAY":
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_DESTINATION"
+            resp = build_response(
+                "📍 Nouvelle adresse de livraison ?\n"
+                "• Envoyez *l'adresse*\n"
+                "• ou *partagez votre position*.\n"
+                "(Tapez *Retour* pour revenir.)"
+            )
+            resp["ask_location"] = True
+            return resp
+
+        mapping = {
+            "espèces": "espèces", "especes": "espèces", "1": "espèces",
+            "mobile money": "mobile_money", "mobile": "mobile_money", "2": "mobile_money",
+            "virement": "virement", "3": "virement",
         }
-    }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API location_request:", res.text)
-    return res.json()
+        key = t.strip()
+        if key not in mapping:
+            return build_response(
+                "🙏 Merci de choisir un mode valide.",
+                ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
+            )
 
-def send_whatsapp_media_url(to: str, media_url: str, kind: str = "image", caption: Optional[str] = None, filename: Optional[str] = None):
-    """
-    Envoie un média via une URL publique.
-    kind ∈ {"image","video","document","audio"}.
-    - image/video/document : supporte 'caption'
-    - document : optionnel 'filename'
-    """
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    kind = (kind or "image").lower().strip()
-    if kind not in {"image", "video", "document", "audio"}:
-        kind = "image"
+        session.setdefault("new_request", {})["payment_method"] = mapping[key]
+        session["step"] = "MARKET_CONFIRM"
 
-    content = {"link": media_url}
-    if caption and kind in {"image", "video", "document"}:
-        content["caption"] = caption
-    if filename and kind == "document":
-        content["filename"] = filename
+        d = session["new_request"]
+        merchant = session.get("market_merchant", {})
+        pickup_addr, _ = _merchant_pickup_info(merchant)
+        prix = _fmt_fcfa(d.get("value_fcfa", 0))
+        pay_label = {
+            "espèces": "Espèces",
+            "mobile_money": "Mobile Money",
+            "virement": "Virement",
+        }.get(d.get("payment_method", ""), "—")
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": kind,
-        kind: content
-    }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API media_url:", res.text)
-    return res.json()
+        recap = (
+            "📝 *Récapitulatif de votre commande*\n"
+            f"• Marchand : {_merchant_display_name(merchant)}\n"
+            f"• Retrait : {pickup_addr}\n"
+            f"• Livraison : {d.get('depart', '—')}\n"
+            f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
+            f"• Paiement : {pay_label}\n\n"
+            "Tout est bon ?"
+        )
+        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
-def upload_media(file_path: str, mime: Optional[str] = None) -> dict:
-    """
-    Upload d’un fichier binaire vers WhatsApp pour obtenir un media_id réutilisable.
-    Retourne le JSON de l’API (contient 'id' si OK).
-    """
-    if not PHONE_NUMBER_ID:
-        raise RuntimeError("WHATSAPP_PHONE_NUMBER_ID non défini")
+    # -------- CONFIRMATION --------
+    if step == "MARKET_CONFIRM":
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_PAY"
+            return build_response(
+                "💳 Choisissez un mode de paiement :",
+                ["Espèces", "Mobile Money", "Virement", "🔙 Retour"]
+            )
 
-    upload_url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-    mime = mime or (mimetypes.guess_type(file_path)[0] or "application/octet-stream")
+        if t in {"confirmer", "oui", "ok"}:
+            interim = build_response("✨ Je finalise votre commande…")
+            result = marketplace_create_order(session)
+            return result if result else interim
 
-    with open(file_path, "rb") as f:
-        files = {
-            "file": (os.path.basename(file_path), f, mime),
-            "messaging_product": (None, "whatsapp"),
-        }
-        res = requests.post(upload_url, headers=headers, files=files)
-    print("Réponse API upload_media:", res.text)
-    return res.json()  # ex: {"id":"MEDIA_ID"}
+        if t in {"annuler", "non"}:
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
+            return build_response("✅ Commande annulée. Que souhaitez-vous faire ?", MAIN_MENU_BTNS)
 
-def send_whatsapp_media_id(to: str, media_id: str, kind: str = "image", caption: Optional[str] = None, filename: Optional[str] = None):
-    """
-    Envoie un média déjà uploadé (via son media_id).
-    kind ∈ {"image","video","document","audio"}.
-    - image/video/document : supporte 'caption'
-    - document : optionnel 'filename'
-    """
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    kind = (kind or "image").lower().strip()
-    if kind not in {"image", "video", "document", "audio"}:
-        kind = "image"
+        if t in {"modifier"}:
+            session["step"] = "MARKET_EDIT"
+            return build_response(
+                "✏️ Que souhaitez-vous modifier ?",
+                ["Produit", "Paiement", "Adresse de livraison", "Annuler", "🔙 Retour"]
+            )
 
-    content = {"id": media_id}
-    if caption and kind in {"image", "video", "document"}:
-        content["caption"] = caption
-    if filename and kind == "document":
-        content["filename"] = filename
+        return build_response("👉 Répondez par *Confirmer*, *Modifier* ou *Annuler*.",
+                              ["Confirmer", "Modifier", "Annuler", "🔙 Retour"])
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": kind,
-        kind: content
-    }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API media_id:", res.text)
-    return res.json()
+    # -------- EDIT --------
+    if step == "MARKET_EDIT":
+        # ✅ Reconnaître le retour
+        if _is_retour(text):
+            session["step"] = "MARKET_CONFIRM"
+            d = session.get("new_request", {})
+            merchant = session.get("market_merchant", {})
+            pickup_addr, _ = _merchant_pickup_info(merchant)
+            prix = _fmt_fcfa(d.get("value_fcfa", 0))
+            pay_label = {
+                "espèces": "Espèces",
+                "mobile_money": "Mobile Money",
+                "virement": "Virement",
+            }.get(d.get("payment_method", ""), "—")
 
-def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "Options"):
-    """
-    Envoi d’un menu (list message) WhatsApp Cloud API.
-    rows = [{"id": "accept_123", "title": "Accepter #123", "description": "Départ → Destination"}, ...]
-    """
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "body": {"text": body_text},
-            "action": {
-                "button": "Choisir",
-                "sections": [{
-                    "title": title,
-                    "rows": rows
-                }]
-            }
-        }
-    }
-    res = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-    print("Réponse API list:", res.text)
-    return res.json()
+            recap = (
+                "📝 *Récapitulatif de votre commande*\n"
+                f"• Marchand : {_merchant_display_name(merchant)}\n"
+                f"• Retrait : {pickup_addr}\n"
+                f"• Livraison : {d.get('depart', '—')}\n"
+                f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
+                f"• Paiement : {pay_label}\n\n"
+                "Tout est bon ?"
+            )
+            return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
-def dispatch_whatsapp_message(to: str, resp: dict):
-    """
-    Envoie la réponse générée par le bot via la bonne fonction WhatsApp.
-    """
-    text = resp.get("response", "")
+        if t == "produit":
+            session["step"] = "MARKET_PRODUCTS"
+            produits = session.get("market_products", {})
+            btns = list(produits.keys())[:3] + ["🔙 Retour"]
+            return build_response("📦 Choisissez un autre produit :", btns)
 
-    # Cas localisation
-    if resp.get("ask_location"):
-        return send_whatsapp_location_request(to)
+        if t == "paiement":
+            session["step"] = "MARKET_PAY"
+            return build_response("💳 Choisissez un autre mode de paiement :",
+                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
 
-    # ✅ Cas LISTE WhatsApp (NOUVEAU!)
-    if resp.get("whatsapp_list"):
-        list_config = resp["whatsapp_list"]
-        rows = list_config.get("rows", [])
-        title = list_config.get("title", "Options")
-        return send_whatsapp_list(to, text, rows, title=title)
+        if t in ["adresse de livraison", "adresse"]:
+            session["step"] = "MARKET_DESTINATION"
+            resp = build_response(
+                "📍 Nouvelle adresse de livraison ? Envoyez l'adresse ou partagez la position.\n(Tapez *Retour* pour revenir.)")
+            resp["ask_location"] = True
+            return resp
 
-    # Cas boutons (limité à 3)
-    if "buttons" in resp and resp["buttons"]:
-        return send_whatsapp_buttons(to, text, resp["buttons"])
+        if t == "annuler":
+            session["step"] = "MARKET_CONFIRM"
+            d = session.get("new_request", {})
+            merchant = session.get("market_merchant", {})
+            pickup_addr, _ = _merchant_pickup_info(merchant)
+            prix = _fmt_fcfa(d.get("value_fcfa", 0))
+            pay_label = {
+                "espèces": "Espèces",
+                "mobile_money": "Mobile Money",
+                "virement": "Virement",
+            }.get(d.get("payment_method", ""), "—")
 
-    # Fallback texte
-    return send_whatsapp_message(to, text)
+            recap = (
+                "📝 *Récapitulatif de votre commande*\n"
+                f"• Marchand : {_merchant_display_name(merchant)}\n"
+                f"• Retrait : {pickup_addr}\n"
+                f"• Livraison : {d.get('depart', '—')}\n"
+                f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
+                f"• Paiement : {pay_label}\n\n"
+                "Tout est bon ?"
+            )
+            return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
+
+        # Choix non reconnu
+        return build_response(
+            "Je n'ai pas compris. Que souhaitez-vous modifier ?",
+            ["Produit", "Paiement", "Adresse de livraison", "Annuler", "🔙 Retour"]
+        )
+
+    # -------- FALLBACK --------
+    if text:
+        return ai_fallback(text, session.get("phone"))
+    return build_response("🤖 Dites *Marketplace* ou *Menu* pour continuer.", MAIN_MENU_BTNS)
+
+
+# ------------------------------------------------------
+# Wrapper pour compatibilité avec le router
+# ------------------------------------------------------
+def handle_message(phone: str, text: str,
+                   *, lat: Optional[float] = None,
+                   lng: Optional[float] = None,
+                   **_) -> Dict[str, Any]:
+    session = get_session(phone)
+
+    # ✅ Initialiser si première visite
+    if not session.get("market_categories") and not session.get("step", "").startswith("MARKET_"):
+        return _begin_marketplace(session)
+
+    return flow_marketplace_handle(session, text, lat=lat, lng=lng)
