@@ -56,10 +56,10 @@ def _ensure_entreprise_id(session: Dict[str, Any]) -> Optional[int]:
 def toggle_boutique(session: Dict[str, Any]) -> Dict[str, Any]:
     eid = session.get("user", {}).get("id") or _ensure_entreprise_id(session)
     if not eid:
-        return build_response("⚠️ Profil entreprise introuvable. Merci de vous reconnecter.", MAIN_BTNS)
+        return build_response("⚠️ Impossible d'accéder à votre profil. Merci de vous reconnecter.", MAIN_BTNS + ["🔙 Retour"])
     r = api_request(session, "POST", f"/api/v1/auth/entreprises/{eid}/toggle_actif/", json={})
     if r.status_code not in (200, 202):
-        return build_response("😕 Impossible de changer l’état de la boutique pour le moment.", MAIN_BTNS)
+        return build_response("😕 Impossible de changer l'état de la boutique pour le moment.", MAIN_BTNS + ["🔙 Retour"])
     me = api_request(session, "GET", "/api/v1/auth/entreprises/my_profile/")
     actif = bool((me.json() or {}).get("actif", False)) if me.status_code == 200 else False
     return build_response(f"🏬 Boutique : {'🟢 Ouverte' if actif else '🔴 Fermée'}.", MAIN_BTNS)
@@ -70,14 +70,14 @@ def toggle_boutique(session: Dict[str, Any]) -> Dict[str, Any]:
 def list_my_products(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "GET", "/api/v1/marketplace/produits/?mine=1")
     if r.status_code != 200:
-        return build_response("⚠️ Erreur lors du chargement de vos produits. Réessayez un peu plus tard.", MAIN_BTNS)
+        return build_response("⚠️ Impossible de charger vos produits. Réessayez plus tard.", MAIN_BTNS + ["🔙 Retour"])
     arr = r.json() or []
     if isinstance(arr, dict) and "results" in arr:
         arr = arr["results"]
     if not arr:
         return build_response(
             "📦 Aucun produit publié.\n👉 Tapez *Créer produit* pour ajouter un article.",
-            _btns("Créer produit","Commandes","Menu")
+            _btns("Créer produit","Commandes","🔙 Retour")
         )
     lines = []
     for p in arr[:5]:
@@ -89,13 +89,13 @@ def list_my_products(session: Dict[str, Any]) -> Dict[str, Any]:
         lines.append(f"#{pid} • {nom} • {prix} XAF • Stock {stock} {actif}")
     return build_response(
         "🗂️ *Mes produits*\n" + "\n".join(lines) + "\n\n👉 *Détail <id>* ou *Edit <id>*",
-        _btns("Créer produit","Commandes","Menu")
+        _btns("Créer produit","Commandes","🔙 Retour")
     )
 
 def product_detail(session: Dict[str, Any], pid: str) -> Dict[str, Any]:
     r = api_request(session, "GET", f"/api/v1/marketplace/produits/{pid}/")
     if r.status_code != 200:
-        return build_response("❌ Produit introuvable.", MAIN_BTNS)
+        return build_response("❌ Produit introuvable.", MAIN_BTNS + ["🔙 Retour"])
     p = r.json() or {}
     txt = (
         f"📄 *Produit #{p.get('id','—')}*\n"
@@ -107,12 +107,12 @@ def product_detail(session: Dict[str, Any], pid: str) -> Dict[str, Any]:
         f"• Description : {p.get('description','—')}\n"
     )
     session.setdefault("ctx", {})["current_product_id"] = p.get("id")
-    return build_response(txt, _btns("Mettre à jour","Mes produits","Menu"))
+    return build_response(txt, _btns("Mettre à jour","Mes produits","🔙 Retour"))
 
 def product_patch(session: Dict[str, Any], pid: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "PATCH", f"/api/v1/marketplace/produits/{pid}/", json=fields)
     if r.status_code not in (200, 202):
-        return build_response("😕 Mise à jour du produit impossible pour le moment.", _btns("Mes produits","Menu"))
+        return build_response("😕 Mise à jour du produit impossible pour le moment.", _btns("Mes produits","🔙 Retour"))
     return product_detail(session, pid)
 
 # ---------- Wizard création produit ----------
@@ -122,7 +122,7 @@ def create_start(session: Dict[str, Any]) -> Dict[str, Any]:
         "nom": None, "prix": None, "categorie_id": None, "stock": None,
         "description": None, "image_url": None, "actif": True,
     }
-    return build_response("🆕 *Création produit* — Quel est le *nom* de l’article ?")
+    return build_response("🆕 *Création produit* — Quel est le *nom* de l'article ?", ["🔙 Retour"])
 
 def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[str]) -> Dict[str, Any]:
     np = session["ctx"]["new_product"]
@@ -131,15 +131,15 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
 
     if step == "PROD_NAME":
         if not tt:
-            return build_response("⚠️ Entrez un nom de produit.")
+            return build_response("⚠️ Entrez un nom de produit.", ["🔙 Retour"])
         np["nom"] = tt
         session["step"] = "PROD_PRICE"
-        return build_response("💰 *Prix* (XAF) ? (ex. `4500`)")
+        return build_response("💰 *Prix* (XAF) ? (ex. `4500`)", ["🔙 Retour"])
 
     if step == "PROD_PRICE":
         amount = re.sub(r"[^0-9]", "", tt)
         if not amount:
-            return build_response("⚠️ Entrez un nombre valide. Ex. `4500`")
+            return build_response("⚠️ Entrez un nombre valide. Ex. `4500`", ["🔙 Retour"])
         np["prix"] = int(amount)
         # Charger catégories
         r = api_request(session, "GET", "/api/v1/marketplace/categories/")
@@ -150,37 +150,40 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
         except Exception:
             cats = []
         if not cats:
-            return build_response("😕 Aucune catégorie disponible pour le moment.", _btns("Annuler","Menu"))
+            return build_response("😕 Aucune catégorie disponible pour le moment.", _btns("Annuler","🔙 Retour"))
         session["ctx"]["categories"] = {str(i+1): c for i, c in enumerate(cats)}
         session["step"] = "PROD_CATEGORY_CHOICE"
         lignes = [f"{i+1}. {c.get('nom') or c.get('name') or '—'}" for i,c in enumerate(cats)]
-        btns = list(session["ctx"]["categories"].keys())[:3]
-        return build_response("🏷️ Choisissez une *catégorie* :\n" + "\n".join(lignes), btns)
+        btns = list(session["ctx"]["categories"].keys())[:3] + ["🔙 Retour"]
+        return build_response("🏷️ Choisissez une *catégorie* :\n" + "\n".join(lignes), btns[:3])
 
     if step == "PROD_CATEGORY_CHOICE":
         cats = session["ctx"].get("categories", {})
         if tt not in cats:
-            btns = list(cats.keys())[:3]
-            return build_response("⚠️ Choisissez un *numéro* de catégorie valide.", btns)
+            btns = list(cats.keys())[:3] + ["🔙 Retour"]
+            return build_response("⚠️ Choisissez un *numéro* de catégorie valide.", btns[:3])
         np["categorie_id"] = cats[tt].get("id")
         session["step"] = "PROD_STOCK"
-        return build_response("📦 *Stock* initial ? (ex. `10`)")
+        return build_response("📦 *Stock* initial ? (ex. `10`)", ["🔙 Retour"])
 
     if step == "PROD_STOCK":
         q = re.sub(r"[^0-9]", "", tt)
         if not q:
-            return build_response("⚠️ Entrez un entier. Ex. `10`")
+            return build_response("⚠️ Entrez un entier. Ex. `10`", ["🔙 Retour"])
         np["stock"] = int(q)
         session["step"] = "PROD_DESC"
-        return build_response("📝 *Description courte* ? (une phrase suffit)")
+        return build_response("📝 *Description courte* ? (une phrase suffit)", ["🔙 Retour"])
 
     if step == "PROD_DESC":
         np["description"] = tt or ""
         session["step"] = "PROD_IMAGE"
-        return build_response("🖼️ Envoyez *une image* maintenant (ou tapez *Passer*).")
+        return build_response("🖼️ Envoyez *une image* maintenant (ou tapez *Passer*).", ["Passer", "🔙 Retour"])
 
     if step == "PROD_IMAGE":
-        if media_url and media_url.startswith("http"):
+        if tt.lower() in {"passer", "skip", "suivant"}:
+            # Passer l'image
+            pass
+        elif media_url and media_url.startswith("http"):
             np["image_url"] = media_url
         session["step"] = "PROD_CONFIRM"
         recap = (
@@ -192,7 +195,7 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
             f"• Image : {'Oui' if np.get('image_url') else 'Non'}\n\n"
             "Tout est bon ?"
         )
-        return build_response(recap, PRODUCT_BTNS)
+        return build_response(recap, ["Publier", "Modifier", "🔙 Retour"])
 
     if step == "PROD_CONFIRM":
         low = tt.lower()
@@ -200,12 +203,12 @@ def handle_create_wizard(session: Dict[str, Any], t: str, media_url: Optional[st
             return create_submit(session)
         if low in {"modifier","edit"}:
             session["step"] = "PROD_NAME"
-            return build_response("✏️ Reprenons : quel est le *nom* ?")
+            return build_response("✏️ Reprenons : quel est le *nom* ?", ["🔙 Retour"])
         if low in {"annuler","cancel"}:
             session["step"] = "ENTREPRISE_MENU"
             session["ctx"].pop("new_product", None)
             return build_response("❌ Création annulée.", MAIN_BTNS)
-        return build_response("👉 Répondez par *Publier*, *Modifier* ou *Annuler*.", PRODUCT_BTNS)
+        return build_response("👉 Répondez par *Publier*, *Modifier* ou *Retour*.", ["Publier", "Modifier", "🔙 Retour"])
 
     return build_response("👉 Tapez *Publier* pour créer, ou *Modifier* pour reprendre.", PRODUCT_BTNS)
 
@@ -213,7 +216,7 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
     np = session["ctx"]["new_product"]
     eid = session.get("user", {}).get("id") or _ensure_entreprise_id(session)
     if not eid:
-        return build_response("⚠️ Impossible d’identifier votre entreprise. Reconnectez-vous.", MAIN_BTNS)
+        return build_response("⚠️ Impossible d'identifier votre entreprise. Reconnectez-vous.", MAIN_BTNS + ["🔙 Retour"])
 
     payload = {
         "nom": np["nom"],
@@ -230,7 +233,7 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "POST", "/api/v1/marketplace/produits/", json=payload)
     if r.status_code not in (200, 201):
         logger.warning(f"[ENTREPRISE] create product failed: {r.status_code}")
-        return build_response("😕 Échec de création du produit. Vérifiez les champs et réessayez.", _btns("Mes produits","Menu"))
+        return build_response("😕 Échec de création du produit. Vérifiez les champs et réessayez.", _btns("Mes produits","🔙 Retour"))
 
     p = r.json() or {}
     prod_id  = p.get("id") or (p.get("produit") or {}).get("id")
@@ -250,12 +253,12 @@ def create_submit(session: Dict[str, Any]) -> Dict[str, Any]:
 def list_my_orders(session: Dict[str, Any]) -> Dict[str, Any]:
     r = api_request(session, "GET", "/api/v1/marketplace/commandes/?mine=1")
     if r.status_code != 200:
-        return build_response("⚠️ Erreur lors du chargement des commandes. Réessayez plus tard.", MAIN_BTNS)
+        return build_response("⚠️ Impossible de charger les commandes. Réessayez plus tard.", MAIN_BTNS + ["🔙 Retour"])
     arr = r.json() or []
     if isinstance(arr, dict) and "results" in arr:
         arr = arr["results"]
     if not arr:
-        return build_response("📭 Aucune commande pour le moment.", MAIN_BTNS)
+        return build_response("📭 Aucune commande pour le moment.", MAIN_BTNS + ["🔙 Retour"])
 
     lines = []
     for c in arr[:5]:
@@ -266,13 +269,13 @@ def list_my_orders(session: Dict[str, Any]) -> Dict[str, Any]:
         lines.append(f"#{cid} • {statut} • {total} XAF • {client}")
     return build_response(
         "🧾 *Mes commandes*\n" + "\n".join(lines) + "\n\n👉 *Commande <id>* pour le détail",
-        _btns("Commandes","Mes produits","Menu")
+        _btns("Commandes","Mes produits","🔙 Retour")
     )
 
 def order_detail(session: Dict[str, Any], cid: str) -> Dict[str, Any]:
     r = api_request(session, "GET", f"/api/v1/marketplace/commandes/{cid}/")
     if r.status_code != 200:
-        return build_response("❌ Commande introuvable.", MAIN_BTNS)
+        return build_response("❌ Commande introuvable.", MAIN_BTNS + ["🔙 Retour"])
     c = r.json() or {}
     items = c.get("lignes") or c.get("items") or []
     lst = []
@@ -292,7 +295,7 @@ def order_detail(session: Dict[str, Any], cid: str) -> Dict[str, Any]:
         + "\n\nActions rapides : *Accepter*, *Préparer*, *Expédier*, *Livrée*, *Annuler*"
     )
     session.setdefault("ctx", {})["current_order_id"] = c.get("id")
-    return build_response(txt, ORDER_BTNS)
+    return build_response(txt, ["Accepter", "Préparer", "🔙 Retour"])
 
 def order_update_status(session: Dict[str, Any], cid: str, statut: str) -> Dict[str, Any]:
     s = (statut or "").lower()
@@ -302,13 +305,13 @@ def order_update_status(session: Dict[str, Any], cid: str, statut: str) -> Dict[
     if s in {"livrée","livree"}: s = "livree"
     if s == "annuler": s = "annulee"
     if s not in STATUTS_CMD:
-        return build_response("❌ Statut inconnu. (Accepter / Préparer / Expédier / Livrée / Annuler)")
+        return build_response("❌ Statut inconnu. (Accepter / Préparer / Expédier / Livrée / Annuler)", ["🔙 Retour"])
 
     r = api_request(session, "POST", f"/api/v1/marketplace/commandes/{cid}/update_statut/", json={"statut": s})
     if r.status_code not in (200, 202):
         logger.warning(f"[ENTREPRISE] update order status failed: {r.status_code}")
-        return build_response("😕 Mise à jour du statut impossible pour le moment.", _btns("Commandes","Menu"))
-    return build_response(f"✅ Commande #{cid} → *{s}*.", _btns("Commandes","Mes produits","Menu"))
+        return build_response("😕 Mise à jour du statut impossible pour le moment.", _btns("Commandes","🔙 Retour"))
+    return build_response(f"✅ Commande #{cid} → *{s}*.", _btns("Commandes","Mes produits","🔙 Retour"))
 
 # -----------------------------
 # Router texte
@@ -320,6 +323,19 @@ def handle_message(phone: str, text: str,
                    **_) -> Dict[str, Any]:
     t = (normalize(text) or "").lower()
     session = get_session(phone)
+
+    # Gestion bouton retour universel
+    if t in {"retour", "back", "🔙 retour"}:
+        current_step = session.get("step", "")
+        # Retour depuis création/édition produit → menu
+        if current_step.startswith("PROD_"):
+            session["step"] = "ENTREPRISE_MENU"
+            session["ctx"].pop("new_product", None)
+            session["ctx"].pop("edit_field", None)
+            return build_response("🏠 Menu entreprise", MAIN_BTNS)
+        # Sinon retour au menu
+        session["step"] = "ENTREPRISE_MENU"
+        return build_response("🏠 Menu entreprise", MAIN_BTNS)
 
     # Salutations / Menu
     if t in {"menu","bonjour","salut","hello","hi","accueil","entreprise"}:

@@ -113,24 +113,52 @@ def whatsapp_webhook(request):
             elif msg_type == "location":
                 lat = msg["location"]["latitude"]
                 lng = msg["location"]["longitude"]
+                
+                # Stocker latitude et longitude séparément en plus du format combiné
+                location_str = f"{lat},{lng}"
 
                 if session.get("step") == "SIGNUP_MARCHAND_GPS":
-                    session.setdefault("signup", {}).setdefault("data", {})["coordonnees_gps"] = f"{lat},{lng}"
+                    signup_data = session.setdefault("signup", {}).setdefault("data", {})
+                    signup_data["coordonnees_gps"] = location_str
+                    signup_data["latitude"] = lat
+                    signup_data["longitude"] = lng
                     session["step"] = "SIGNUP_MARCHAND_RCCM"
                     text = "LOCATION_SHARED"
 
                 elif session.get("step") == "COURIER_DEPART":
                     nr = session.setdefault("new_request", {})
-                    nr["depart"] = f"{lat},{lng}"
-                    nr["coordonnees_gps"] = f"{lat},{lng}"
+                    nr["depart"] = "Position partagée"
+                    nr["coordonnees_gps"] = location_str
+                    nr["latitude_depart"] = lat
+                    nr["longitude_depart"] = lng
                     session["step"] = "COURIER_DEST"
                     text = "LOCATION_SHARED"
-
-                else:  # fallback profil
-                    session.setdefault("profile", {})["gps"] = f"{lat},{lng}"
+                
+                elif session.get("step") == "COURIER_DEST":
+                    nr = session.setdefault("new_request", {})
+                    nr["destination"] = "Position partagée"
+                    nr["coordonnees_livraison"] = location_str
+                    nr["latitude_arrivee"] = lat
+                    nr["longitude_arrivee"] = lng
+                    session["step"] = "DEST_NOM"
+                    text = "LOCATION_SHARED"
+                
+                elif session.get("step") == "MARKET_DESTINATION":
+                    nr = session.setdefault("new_request", {})
+                    nr["depart"] = "Position actuelle"
+                    nr["coordonnees_gps"] = location_str
+                    nr["latitude"] = lat
+                    nr["longitude"] = lng
+                    session["step"] = "MARKET_PAY"
                     text = "LOCATION_SHARED"
 
-                logger.info(f"[WA] Localisation reçue de {from_number}: {lat},{lng}")
+                else:  # fallback profil ou position livreur
+                    session.setdefault("profile", {})["gps"] = location_str
+                    session.setdefault("profile", {})["latitude"] = lat
+                    session.setdefault("profile", {})["longitude"] = lng
+                    text = "LOCATION_SHARED"
+
+                logger.info(f"[WA] Localisation reçue de {from_number}: latitude={lat}, longitude={lng}")
 
             # Passage au moteur
             bot_output = handle_incoming(

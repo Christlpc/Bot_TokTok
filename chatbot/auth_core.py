@@ -155,15 +155,14 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
     )
     if r.status_code != 200:
         logger.info("login_failed", extra={"event": "login_failed", "phone": username, "status_code": r.status_code})
-        return build_response("⛔ Mot de passe incorrect ou compte introuvable.\nRéessayez ou tapez *Aide* si besoin."
-, ["Connexion", "Aide"])
+        return build_response("⛔ Mot de passe incorrect ou compte introuvable.\nRéessayez ou tapez *Aide* si besoin.", ["Connexion", "Aide", "🔙 Retour"])
 
     data = r.json() or {}
     access = data.get("access") or data.get("token")
     refresh = data.get("refresh")
     if not access:
         logger.warning("login_no_token", extra={"event": "login_no_token", "phone": username})
-        return build_response("⚠️ Une erreur technique est survenue. Impossible de récupérer votre session.\nVeuillez réessayer dans quelques instants."
+        return build_response("⚠️ Une erreur technique est survenue.\nVeuillez réessayer dans quelques instants.", ["Connexion", "🔙 Retour"]
 )
 
     session["auth"]["access"] = access
@@ -220,12 +219,28 @@ def signup_start(session: Dict[str, Any]):
     session["signup"] = {"role": None, "data": {}, "password": None}
     session["step"] = "SIGNUP_ROLE"
     return build_response("📝 Super ! Pour commencer, indiquez votre rôle sur TokTok :"
-, SIGNUP_ROLE_BTNS)
+, SIGNUP_ROLE_BTNS + ["🔙 Retour"])
 
 def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     session = get_session(phone)
     t = normalize(text)
     tl = _strip_accents(t.lower())
+
+    # Gestion bouton retour universel
+    if tl in {"retour", "back", "🔙 retour"}:
+        current_step = session.get("step", "")
+        # Retour depuis choix rôle → menu d'accueil
+        if current_step == "SIGNUP_ROLE":
+            session["step"] = "WELCOME_CHOICE"
+            session.pop("signup", None)
+            return build_response(WELCOME_TEXT, WELCOME_BTNS)
+        # Retour depuis n'importe quelle étape d'inscription → choix rôle
+        if current_step.startswith("SIGNUP_"):
+            session["step"] = "SIGNUP_ROLE"
+            return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+        # Sinon retour au menu d'accueil
+        session["step"] = "WELCOME_CHOICE"
+        return build_response(WELCOME_TEXT, WELCOME_BTNS)
 
     # Choix rôle
     if session.get("step", "").startswith("SIGNUP_ROLE"):
@@ -234,36 +249,37 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
             tl = "entreprise"
         role = m.get(tl)
         if not role:
-            return build_response("🙏 Je n’ai pas compris ce choix. Vous êtes *Client*, *Livreur* ou *Entreprise* ?"
-, SIGNUP_ROLE_BTNS)
+            return build_response("🙏 Je n'ai pas compris ce choix. Vous êtes *Client*, *Livreur* ou *Entreprise* ?"
+, SIGNUP_ROLE_BTNS + ["🔙 Retour"])
         session["signup"]["role"] = role
         if role == "client":
             session["step"] = "SIGNUP_CLIENT_NAME"
-            return build_response("👤 *Client* — Votre *nom complet* ?\nExemple : `Jean Mbemba`")
+            return build_response("👤 *Client* — Votre *nom complet* ?\nExemple : `Jean Mbemba`", ["🔙 Retour"])
         if role == "livreur":
             session["step"] = "SIGNUP_LIVREUR_NAME"
-            return build_response("🚴 *Livreur* — Votre *nom complet* ?\nExemple : `Paul Ngoma`")
+            return build_response("🚴 *Livreur* — Votre *nom complet* ?\nExemple : `Paul Ngoma`", ["🔙 Retour"])
         if role == "entreprise":
             session["step"] = "SIGNUP_MARCHAND_ENTREPRISE"
-            return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?\nExemple : `Savana Restaurant`")
+            return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?\nExemple : `Savana Restaurant`", ["🔙 Retour"])
 
     # ----- Client -----
     if session["step"] == "SIGNUP_CLIENT_NAME":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_CLIENT_EMAIL"
-        return build_response("📧 *Client* — Votre *email* ?\nExemple : `nom.prenom@gmail.com`")
+        return build_response("📧 *Client* — Votre *email* ?\nExemple : `nom.prenom@gmail.com`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_CLIENT_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_CLIENT_ADDRESS"
-        return build_response("🏠 Quelle est votre adresse principale ?\nExemple : `25 Avenue de la Paix, Brazzaville`"
+        return build_response("🏠 Quelle est votre adresse principale ?\nExemple : `25 Avenue de la Paix, Brazzaville`", ["🔙 Retour"]
 )
     if session["step"] == "SIGNUP_CLIENT_ADDRESS":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_CLIENT_PASSWORD"
         return build_response(
             "🔐 Créez un mot de passe sécurisé (au moins 8 caractères, avec majuscules, chiffres et symboles)."
-            "\n\nExemples : `Toktok2025!`, `M@Maison123`"
+            "\n\nExemples : `Toktok2025!`, `M@Maison123`",
+            ["🔙 Retour"]
         )
     if session["step"] == "SIGNUP_CLIENT_PASSWORD":
         session["signup"]["password"] = t
@@ -274,35 +290,36 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_LIVREUR_EMAIL"
-        return build_response("📧 *Livreur* — Votre *email* ?\nExemple : `livreur.exemple@gmail.com`")
+        return build_response("📧 *Livreur* — Votre *email* ?\nExemple : `livreur.exemple@gmail.com`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_LIVREUR_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_LIVREUR_TYPE"
-        return build_response("🏷️ *Type livreur* ?\nExemples : `independant`, `societe`, `autoentrepreneur`")
+        return build_response("🏷️ *Type livreur* ?\nExemples : `independant`, `societe`, `autoentrepreneur`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_LIVREUR_TYPE":
         norm = _norm_type_livreur(t)
         if not norm:
-            return build_response("Type invalide. Choisissez: *independant*, *societe*, *autoentrepreneur*.")
+            return build_response("⚠️ Type invalide. Choisissez: *independant*, *societe*, *autoentrepreneur*.", ["🔙 Retour"])
         session["signup"]["data"]["type_livreur"] = norm
         session["step"] = "SIGNUP_LIVREUR_VEHICULE"
-        return build_response("🛵 *Type de véhicule* ?\nExemples : `moto`, `voiture`, `velo`, `camionnette`")
+        return build_response("🛵 *Type de véhicule* ?\nExemples : `moto`, `voiture`, `velo`, `camionnette`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_LIVREUR_VEHICULE":
         norm = _norm_type_vehicule(t)
         if not norm:
-            return build_response("Type véhicule invalide. Exemples: *moto*, *voiture*, *velo*, *camionnette*.")
+            return build_response("⚠️ Type véhicule invalide. Exemples: *moto*, *voiture*, *velo*, *camionnette*.", ["🔙 Retour"])
         session["signup"]["data"]["type_vehicule"] = norm
         session["step"] = "SIGNUP_LIVREUR_PERMIS"
-        return build_response("🧾 *Numéro de permis* ?\nExemple : `BZV-123456-2025`")
+        return build_response("🧾 *Numéro de permis* ?\nExemple : `BZV-123456-2025`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_LIVREUR_PERMIS":
         session["signup"]["data"]["numero_permis"] = t
         session["step"] = "SIGNUP_LIVREUR_ZONE"
-        return build_response("🗺️ *Zone d’activité* ?\nExemples : `Brazzaville Centre`, `Poto-Poto`, `Talangaï`")
+        return build_response("🗺️ *Zone d'activité* ?\nExemples : `Brazzaville Centre`, `Poto-Poto`, `Talangaï`", ["🔙 Retour"])
     if session["step"] == "SIGNUP_LIVREUR_ZONE":
         session["signup"]["data"]["zone_activite"] = t
         session["step"] = "SIGNUP_LIVREUR_PASSWORD"
         return build_response(
             "🔑 *Livreur* — Choisissez un *mot de passe*.\n"
-            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`"
+            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`",
+            ["🔙 Retour"]
         )
     if session["step"] == "SIGNUP_LIVREUR_PASSWORD":
         session["signup"]["password"] = t
@@ -357,43 +374,57 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     if session["step"] == "SIGNUP_MARCHAND_TYPE":
         session["signup"]["data"]["type_entreprise"] = _strip_accents(t.lower().strip())
         session["step"] = "SIGNUP_MARCHAND_DESC"
-        return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`")
+        return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`", ["🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_DESC":
         session["signup"]["data"]["description"] = t
         session["step"] = "SIGNUP_MARCHAND_ADR"
-        return build_response("📍 *Adresse* de l'entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`")
+        return build_response("📍 *Adresse* de l'entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`", ["🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_ADR":
         session["signup"]["data"]["adresse"] = t
         session["step"] = "SIGNUP_MARCHAND_GPS"
         resp = build_response(
-            "📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou bien entrer l'adresse à la main.")
-        resp["ask_location"] = "📌 Envoyez votre *position GPS* (exemple : Brazzaville Centre)."
+            "📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou taper *Passer* pour continuer.", ["Passer", "🔙 Retour"])
+        resp["ask_location"] = "📌 Envoyez votre *position GPS* ou tapez *Passer*."
         return resp
+
+    if session["step"] == "SIGNUP_MARCHAND_GPS":
+        # Si l'utilisateur a tapé "Passer", on continue sans GPS
+        if tl in {"passer", "skip", "suivant", "continuer"}:
+            session["signup"]["data"]["coordonnees_gps"] = ""
+            session["step"] = "SIGNUP_MARCHAND_RCCM"
+            return build_response("🧾 *Numéro RCCM* ?\nExemple : `CG-BZV-01-2024-B12-00123`", ["🔙 Retour"])
+        # Si localisation partagée (gérée dans views.py)
+        if tl == "location_shared":
+            session["step"] = "SIGNUP_MARCHAND_RCCM"
+            return build_response("✅ Localisation enregistrée.\n🧾 *Numéro RCCM* ?\nExemple : `CG-BZV-01-2024-B12-00123`", ["🔙 Retour"])
+        # Sinon on attend la localisation
+        return build_response("⚠️ Partagez votre localisation ou tapez *Passer*.", ["Passer", "🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_RCCM":
         session["signup"]["data"]["numero_rccm"] = t
         session["step"] = "SIGNUP_MARCHAND_HOR"
-        return build_response("⏰ *Horaires d'ouverture* ?\nExemple : `Lun-Sam 08h-20h`")
+        return build_response("⏰ *Horaires d'ouverture* ?\nExemple : `Lun-Sam 08h-20h`", ["🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_HOR":
         session["signup"]["data"]["horaires_ouverture"] = t
         session["step"] = "SIGNUP_MARCHAND_CONTACT"
-        return build_response("👤 *Prénom Nom* du responsable ?\nExemple : `Pierre Mabiala`")
+        return build_response("👤 *Prénom Nom* du responsable ?\nExemple : `Pierre Mabiala`", ["🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_CONTACT":
         first, last = (t.split(" ", 1) + [""])[:2]
         session["signup"]["data"].update({"first_name": first, "last_name": last})
         session["step"] = "SIGNUP_MARCHAND_EMAIL"
-        return build_response("📧 *Email* du responsable ?\nExemple : `responsable@entreprise.com`")
+        return build_response("📧 *Email* du responsable ?\nExemple : `responsable@entreprise.com`", ["🔙 Retour"])
 
     if session["step"] == "SIGNUP_MARCHAND_EMAIL":
         session["signup"]["data"]["email"] = t
         session["step"] = "SIGNUP_MARCHAND_PASSWORD"
         return build_response(
             "🔑 *Entreprise* — Choisissez un *mot de passe*.\n"
-            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`"
+            "Exemples : `Toktok2025!`, `M@Maison123`, `Brazzaville#95`",
+            ["🔙 Retour"]
         )
 
     if session["step"] == "SIGNUP_MARCHAND_PASSWORD":
@@ -472,7 +503,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             try:
                 j = rr.json()
             except Exception:
-                j = {"message": rr.text[:200]}
+                j = {"message": "Erreur serveur"}
             msg = _parse_api_errors(j)
             logger.warning(
                 "signup_failed",
@@ -485,8 +516,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
                     "api_details": j.get("details"),
                 },
             )
-            return build_response("🙁 Impossible de finaliser votre inscription :\n" + msg + "\n\nVérifiez les infos saisies ou réessayez plus tard."
- + msg)
+            return build_response("🙁 Impossible de finaliser votre inscription.\n\n" + msg + "\n\nVérifiez les infos saisies ou réessayez plus tard.", ["🔙 Retour"])
 
         # ✅ login auto
         resp = login_common(session, username=phone_e164, password=pwd)
@@ -499,7 +529,7 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.exception("signup_exception", extra={"event": "signup_exception", "role": role, "phone": phone, "err": str(e)})
-        return build_response("😓 Une erreur réseau a interrompu l’inscription.\nMerci de réessayer dans quelques minutes."
+        return build_response("😓 Une erreur réseau a interrompu l'inscription.\nMerci de réessayer dans quelques minutes.", ["🔙 Retour"]
 )
 
 # ---------- Orchestrateur d’auth ----------

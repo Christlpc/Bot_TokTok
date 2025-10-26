@@ -74,7 +74,7 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"[COURIER create error] {e}")
         return build_response(
             "😓 Impossible de créer la demande pour le moment.\n"
-            "Réessayez dans un instant ou revenez au menu.",
+            "Veuillez réessayer dans quelques instants.",
             MAIN_MENU_BTNS
         )
 
@@ -82,6 +82,18 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
 def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
+
+    # Gestion bouton retour universel
+    if t in {"retour", "back", "🔙 retour"}:
+        current_step = session.get("step", "")
+        # Retour depuis une étape de nouvelle demande → menu
+        if current_step.startswith("COURIER_") or current_step.startswith("DEST_"):
+            session["step"] = "MENU"
+            session.pop("new_request", None)
+            return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
+        # Sinon retour au menu
+        session["step"] = "MENU"
+        return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
 
     # Raccourcis menu
     if t in {"menu", "accueil", "0"}:
@@ -94,8 +106,9 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         session["step"] = "COURIER_DEPART"
         resp = build_response(
             "📍 Top départ ! Où récupérer le colis ?\n"
-            "• Envoyez *l’adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
-            "• ou *partagez votre position*."
+            "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
+            "• ou *partagez votre position*.",
+            ["🔙 Retour"]
         )
         resp["ask_location"] = True
         return resp
@@ -109,7 +122,8 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             session["step"] = "COURIER_DEST"
             return build_response(
                 "✅ Position de départ enregistrée.\n"
-                "🎯 Où livrer le colis ? Adresse ou partage de position."
+                "🎯 Où livrer le colis ? Adresse ou partage de position.",
+                ["🔙 Retour"]
             )
 
         if step == "COURIER_DEST":
@@ -117,39 +131,39 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             nr["destination"] = "Position partagée"
             nr["coordonnees_livraison"] = f"{lat},{lng}"
             session["step"] = "DEST_NOM"
-            return build_response("✅ Destination enregistrée.\n👤 Quel est le *nom du destinataire* ?")
+            return build_response("✅ Destination enregistrée.\n👤 Quel est le *nom du destinataire* ?", ["🔙 Retour"])
 
     # Étapes classiques
     if step == "COURIER_DEPART":
         session.setdefault("new_request", {})["depart"] = text
         session["step"] = "COURIER_DEST"
-        return build_response("🎯 Et l’*adresse de destination* ? (ou partagez la position)")
+        return build_response("🎯 Et l'*adresse de destination* ? (ou partagez la position)", ["🔙 Retour"])
 
     if step == "COURIER_DEST":
         session["new_request"]["destination"] = text
         session["step"] = "DEST_NOM"
-        return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`")
+        return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`", ["🔙 Retour"])
 
     if step == "DEST_NOM":
         session["new_request"]["destinataire_nom"] = text
         session["step"] = "DEST_TEL"
-        return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)")
+        return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)", ["🔙 Retour"])
 
     if step == "DEST_TEL":
-        # on normalise léger pour l’affichage ultérieur (mais on n’impose pas de format)
+        # on normalise léger pour l'affichage ultérieur (mais on n'impose pas de format)
         tel = re.sub(r"\s+", " ", text).strip()
         session["new_request"]["destinataire_tel"] = tel
         session["step"] = "COURIER_VALUE"
-        return build_response("💰 Quelle est la *valeur estimée* du colis (en FCFA) ?\nEx. `15000`")
+        return build_response("💰 Quelle est la *valeur estimée* du colis (en FCFA) ?\nEx. `15000`", ["🔙 Retour"])
 
     if step == "COURIER_VALUE":
         digits = re.sub(r"[^0-9]", "", text or "")
         amt = int(digits) if digits else None
         if not amt:
-            return build_response("⚠️ Montant invalide. Saisissez un nombre (ex. `15000`).")
+            return build_response("⚠️ Montant invalide. Saisissez un nombre (ex. `15000`).", ["🔙 Retour"])
         session["new_request"]["value_fcfa"] = amt
         session["step"] = "COURIER_DESC"
-        return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.")
+        return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.", ["🔙 Retour"])
 
     if step == "COURIER_DESC":
         session["new_request"]["description"] = text
@@ -165,7 +179,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             f"• Description : {d.get('description')}\n\n"
             "Tout est bon ?"
         )
-        return build_response(recap, ["Confirmer", "Modifier", "Annuler"])
+        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
 
     if step == "COURIER_CONFIRM":
         if t in {"confirmer", "oui", "ok"}:
