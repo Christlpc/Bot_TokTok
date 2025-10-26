@@ -57,9 +57,16 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         r = api_request(session, "POST", "/api/v1/coursier/missions/", json=payload)
         r.raise_for_status()
         mission = r.json()
+        logger.info(f"[COURIER] create_mission response: {mission}")
+        
         session["step"] = "MENU"
 
-        ref = mission.get("numero_mission") or f"M-{mission.get('id','')}"
+        # Récupérer la référence avec plusieurs fallbacks
+        mission_id = mission.get("id") or mission.get("mission_id") or "?"
+        ref = mission.get("numero_mission") or f"M-{mission_id}"
+        
+        logger.info(f"[COURIER] mission reference: {ref}")
+        
         msg = (
             "🎉 *Demande enregistrée !*\n"
             f"🔖 Référence : {ref}\n"
@@ -71,7 +78,7 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         return build_response(msg, MAIN_MENU_BTNS)
 
     except Exception as e:
-        logger.error(f"[COURIER create error] {e}")
+        logger.exception(f"[COURIER] create_mission exception: {e}")
         return build_response(
             "😓 Impossible de créer la demande pour le moment.\n"
             "Veuillez réessayer dans quelques instants.",

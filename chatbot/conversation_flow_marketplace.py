@@ -233,24 +233,44 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
 
         if r.ok:
             order_data = r.json()
-            order_id = order_data.get("id", "N/A")
+            logger.info(f"[MARKET] create_order response: {order_data}")
+            
+            # Récupérer l'ID avec plusieurs tentatives selon le format de réponse API
+            order_id = (
+                order_data.get("id") or 
+                order_data.get("commande_id") or 
+                order_data.get("order_id") or
+                (order_data.get("commande") or {}).get("id") or
+                (order_data.get("data") or {}).get("id") or
+                "—"
+            )
+            
+            logger.info(f"[MARKET] order_id extracted: {order_id}")
+            
             _cleanup_marketplace_session(session)
             session["step"] = "MENU"
 
             recap = (
                 "✅ *Commande créée avec succès* !\n\n"
-                f"Numéro : *{order_id}*\n"
-                f"Marchand : {_merchant_display_name(merchant)}\n"
-                f"Livraison : {d.get('depart', '—')}\n"
-                f"Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
+                f"🔖 Numéro : *#{order_id}*\n"
+                f"🏪 Marchand : {_merchant_display_name(merchant)}\n"
+                f"📍 Livraison : {d.get('depart', '—')}\n"
+                f"💰 Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
             )
             return build_response(recap, MAIN_MENU_BTNS)
+        else:
+            # Erreur API
+            logger.error(f"[MARKET] create_order API error: status={r.status_code}, response={r.text[:500]}")
+            _cleanup_marketplace_session(session)
+            session["step"] = "MENU"
+            return build_response("❌ Impossible de créer la commande. Veuillez réessayer.", MAIN_MENU_BTNS)
+            
     except Exception as e:
-        logger.error(f"[MARKET] create_order failed: {e}")
+        logger.exception(f"[MARKET] create_order exception: {e}")
 
     _cleanup_marketplace_session(session)
     session["step"] = "MENU"
-    return build_response("❌ Erreur lors de la création.", MAIN_MENU_BTNS)
+    return build_response("❌ Erreur lors de la création de la commande.", MAIN_MENU_BTNS)
 
 
 def _begin_marketplace(session: Dict[str, Any]) -> Dict[str, Any]:
