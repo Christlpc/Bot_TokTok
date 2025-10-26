@@ -324,16 +324,45 @@ def handle_message(phone: str, text: str,
     t = (normalize(text) or "").lower()
     session = get_session(phone)
 
-    # Gestion bouton retour universel
+    # Gestion bouton retour contextuel - étape par étape
     if t in {"retour", "back", "🔙 retour"}:
         current_step = session.get("step", "")
-        # Retour depuis création/édition produit → menu
+        
+        # Navigation step-by-step pour création produit
+        if current_step == "PROD_NAME":
+            session["step"] = "ENTREPRISE_MENU"
+            session["ctx"].pop("new_product", None)
+            return build_response("🏠 Menu entreprise", MAIN_BTNS)
+        elif current_step == "PROD_PRICE":
+            session["step"] = "PROD_NAME"
+            return build_response("🆕 *Création produit* — Quel est le *nom* de l'article ?", ["🔙 Retour"])
+        elif current_step == "PROD_CATEGORY_CHOICE":
+            session["step"] = "PROD_PRICE"
+            return build_response("💰 *Prix* (XAF) ? (ex. `4500`)", ["🔙 Retour"])
+        elif current_step == "PROD_STOCK":
+            session["step"] = "PROD_CATEGORY_CHOICE"
+            cats = session["ctx"].get("categories", {})
+            lignes = [f"{k}. {cats[k].get('nom') or cats[k].get('name') or '—'}" for k in sorted(cats.keys(), key=lambda x: int(x))]
+            btns = list(cats.keys())[:3] + ["🔙 Retour"]
+            return build_response("🏷️ Choisissez une *catégorie* :\n" + "\n".join(lignes), btns[:3])
+        elif current_step == "PROD_DESC":
+            session["step"] = "PROD_STOCK"
+            return build_response("📦 *Stock* initial ? (ex. `10`)", ["🔙 Retour"])
+        elif current_step == "PROD_IMAGE":
+            session["step"] = "PROD_DESC"
+            return build_response("📝 *Description courte* ? (une phrase suffit)", ["🔙 Retour"])
+        elif current_step == "PROD_CONFIRM":
+            session["step"] = "PROD_IMAGE"
+            return build_response("🖼️ Envoyez *une image* maintenant (ou tapez *Passer*).", ["Passer", "🔙 Retour"])
+        
+        # Pour autres étapes, retour au menu
         if current_step.startswith("PROD_"):
             session["step"] = "ENTREPRISE_MENU"
             session["ctx"].pop("new_product", None)
             session["ctx"].pop("edit_field", None)
             return build_response("🏠 Menu entreprise", MAIN_BTNS)
-        # Sinon retour au menu
+        
+        # Défaut : retour au menu
         session["step"] = "ENTREPRISE_MENU"
         return build_response("🏠 Menu entreprise", MAIN_BTNS)
 

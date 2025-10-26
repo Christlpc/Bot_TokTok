@@ -100,7 +100,8 @@ def _build_list_response(text: str, rows: List[dict], section_title: str = "Opti
 def _is_retour(txt: str) -> bool:
     if not txt:
         return False
-    if "🔙" in txt or txt.strip().lower() in {"retour", "back"}:
+    txt_lower = txt.strip().lower()
+    if "🔙" in txt or txt_lower in {"retour", "back", "🔙 retour"}:
         return True
     return normalize(txt) == "retour"
 
@@ -439,6 +440,15 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             msg = "🔙 *Marchands*"
             return _build_list_response(msg, rows, section_title="Marchands")
 
+        # FIX : Extraire le nom du produit depuis le titre complet "Nom - Prix FCFA"
+        # WhatsApp renvoie le titre complet quand l'utilisateur clique
+        text_clean = text
+        if " - " in text and "FCFA" in text:
+            # Extraire la partie avant " - " qui est le nom du produit
+            text_clean = text.split(" - ")[0].strip()
+        
+        t_clean = normalize(text_clean)
+
         # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         product_name_to_id = {}
         for idx, prod in produits.items():
@@ -448,9 +458,9 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         # Chercher d'abord par indice direct
         if t not in produits:
-            # Ensuite par nom du produit
-            if normalize(t) in product_name_to_id:  # ← Ajouter normalize()
-                t = product_name_to_id[normalize(t)]         
+            # Ensuite par nom du produit (avec texte nettoyé)
+            if t_clean in product_name_to_id:
+                t = product_name_to_id[t_clean]         
             else:
                 # Vraiment invalide
                 rows = []
@@ -504,22 +514,37 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             msg = "🔙 *Produits*"
             return _build_list_response(msg, rows, section_title="Produits")
 
-        if lat is not None and lng is not None:
-            session.setdefault("new_request", {})
-            session["new_request"]["depart"] = "Position actuelle"
-            session["new_request"]["coordonnees_gps"] = f"{lat},{lng}"
-        elif text and not _is_retour(text):
+        # Gérer la localisation partagée
+        if (lat is not None and lng is not None) or (text and text.strip().upper() == "LOCATION_SHARED"):
+            # Si on a pas lat/lng mais text="LOCATION_SHARED", récupérer depuis session
+            if lat is None or lng is None:
+                last_loc = session.get("last_location", {})
+                lat = last_loc.get("latitude")
+                lng = last_loc.get("longitude")
+            
+            if lat and lng:
+                session.setdefault("new_request", {})
+                session["new_request"]["depart"] = "Position actuelle"
+                session["new_request"]["coordonnees_gps"] = f"{lat},{lng}"
+                session["new_request"]["latitude"] = lat
+                session["new_request"]["longitude"] = lng
+                session["step"] = "MARKET_PAY"
+                return build_response("💳 Mode de paiement :",
+                                      ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+        
+        # Gérer l'adresse textuelle
+        if text and not _is_retour(text) and text.strip().upper() != "LOCATION_SHARED":
             session.setdefault("new_request", {})
             session["new_request"]["depart"] = text
             session["new_request"]["coordonnees_gps"] = ""
-        else:
-            resp = build_response("⚠️ Besoin d'une adresse ou position.")
-            resp["ask_location"] = True
-            return resp
-
-        session["step"] = "MARKET_PAY"
-        return build_response("💳 Mode de paiement :",
-                              ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+            session["step"] = "MARKET_PAY"
+            return build_response("💳 Mode de paiement :",
+                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+        
+        # Sinon redemander
+        resp = build_response("⚠️ Besoin d'une adresse ou position.")
+        resp["ask_location"] = True
+        return resp
 
     # ========== PAIEMENT ==========
     if step == "MARKET_PAY":

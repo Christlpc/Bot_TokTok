@@ -403,9 +403,12 @@ def handle_message(
     t = normalize(text); tl = t.lower().strip()
     session = get_session(phone)
 
-    # Gestion bouton retour universel
+    # Gestion bouton retour contextuel
     if tl in {"retour", "back", "🔙 retour"}:
+        # Pour livreur, retour simple au menu principal
+        # (pas de wizard multi-étapes comme client/inscription)
         session["step"] = "MENU"
+        session.setdefault("ctx", {}).pop("current_mission_id", None)
         return build_response("🏠 Menu livreur", MAIN_MENU_BTNS)
 
     # Salutations / raccourcis menu

@@ -83,17 +83,60 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     step = session.get("step")
     t = normalize(text).lower() if text else ""
 
-    # Gestion bouton retour universel
+    # Gestion bouton retour contextuel - étape par étape
     if t in {"retour", "back", "🔙 retour"}:
         current_step = session.get("step", "")
-        # Retour depuis une étape de nouvelle demande → menu
-        if current_step.startswith("COURIER_") or current_step.startswith("DEST_"):
+        
+        # Navigation contexuelle selon l'étape
+        if current_step == "COURIER_DEPART":
             session["step"] = "MENU"
             session.pop("new_request", None)
             return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
-        # Sinon retour au menu
-        session["step"] = "MENU"
-        return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
+        elif current_step == "COURIER_DEST":
+            session["step"] = "COURIER_DEPART"
+            resp = build_response(
+                "📍 Où récupérer le colis ?\n"
+                "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
+                "• ou *partagez votre position*.",
+                ["🔙 Retour"]
+            )
+            resp["ask_location"] = True
+            return resp
+        elif current_step == "DEST_NOM":
+            session["step"] = "COURIER_DEST"
+            return build_response("🎯 Et l'*adresse de destination* ? (ou partagez la position)", ["🔙 Retour"])
+        elif current_step == "DEST_TEL":
+            session["step"] = "DEST_NOM"
+            return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`", ["🔙 Retour"])
+        elif current_step == "COURIER_VALUE":
+            session["step"] = "DEST_TEL"
+            return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)", ["🔙 Retour"])
+        elif current_step == "COURIER_DESC":
+            session["step"] = "COURIER_VALUE"
+            return build_response("💰 Quelle est la *valeur estimée* du colis (en FCFA) ?\nEx. `15000`", ["🔙 Retour"])
+        elif current_step == "COURIER_CONFIRM":
+            session["step"] = "COURIER_DESC"
+            return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.", ["🔙 Retour"])
+        elif current_step == "COURIER_EDIT":
+            # Retour depuis modification → confirmation
+            session["step"] = "COURIER_CONFIRM"
+            d = session.get("new_request", {})
+            dest_aff = "Position partagée" if d.get("coordonnees_livraison") else d.get("destination")
+            recap = (
+                "📝 *Récapitulatif*\n"
+                f"• Départ : {d.get('depart')}\n"
+                f"• Destination : {dest_aff}\n"
+                f"• Destinataire : {d.get('destinataire_nom')} ({d.get('destinataire_tel')})\n"
+                f"• Valeur : {_fmt_fcfa(d.get('value_fcfa'))} FCFA\n"
+                f"• Description : {d.get('description')}\n\n"
+                "Tout est bon ?"
+            )
+            return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
+        else:
+            # Défaut : retour au menu
+            session["step"] = "MENU"
+            session.pop("new_request", None)
+            return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
 
     # Raccourcis menu
     if t in {"menu", "accueil", "0"}:
@@ -113,23 +156,35 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         resp["ask_location"] = True
         return resp
 
-    # Localisation partagée
-    if lat is not None and lng is not None:
-        if step == "COURIER_DEPART":
+    # Localisation partagée (reçue depuis WhatsApp)
+    if (lat is not None and lng is not None) or (text and text.strip().upper() == "LOCATION_SHARED"):
+        # Si on a pas lat/lng mais text="LOCATION_SHARED", récupérer depuis session
+        if lat is None or lng is None:
+            last_loc = session.get("last_location", {})
+            lat = last_loc.get("latitude")
+            lng = last_loc.get("longitude")
+        
+        if step == "COURIER_DEPART" and lat and lng:
             nr = session.setdefault("new_request", {})
-            nr["depart"] = "Position actuelle"
+            nr["depart"] = "Position partagée"
             nr["coordonnees_gps"] = f"{lat},{lng}"
+            nr["latitude_depart"] = lat
+            nr["longitude_depart"] = lng
             session["step"] = "COURIER_DEST"
-            return build_response(
+            resp = build_response(
                 "✅ Position de départ enregistrée.\n"
                 "🎯 Où livrer le colis ? Adresse ou partage de position.",
                 ["🔙 Retour"]
             )
+            resp["ask_location"] = True
+            return resp
 
-        if step == "COURIER_DEST":
+        if step == "COURIER_DEST" and lat and lng:
             nr = session.setdefault("new_request", {})
             nr["destination"] = "Position partagée"
             nr["coordonnees_livraison"] = f"{lat},{lng}"
+            nr["latitude_arrivee"] = lat
+            nr["longitude_arrivee"] = lng
             session["step"] = "DEST_NOM"
             return build_response("✅ Destination enregistrée.\n👤 Quel est le *nom du destinataire* ?", ["🔙 Retour"])
 

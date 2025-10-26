@@ -226,21 +226,121 @@ def handle_signup_step(phone: str, text: str) -> Dict[str, Any]:
     t = normalize(text)
     tl = _strip_accents(t.lower())
 
-    # Gestion bouton retour universel
+    # Gestion bouton retour contextuel - étape par étape
     if tl in {"retour", "back", "🔙 retour"}:
         current_step = session.get("step", "")
-        # Retour depuis choix rôle → menu d'accueil
+        role = session.get("signup", {}).get("role")
+        
+        # Navigation contexuelle selon l'étape
         if current_step == "SIGNUP_ROLE":
             session["step"] = "WELCOME_CHOICE"
             session.pop("signup", None)
             return build_response(WELCOME_TEXT, WELCOME_BTNS)
-        # Retour depuis n'importe quelle étape d'inscription → choix rôle
-        if current_step.startswith("SIGNUP_"):
-            session["step"] = "SIGNUP_ROLE"
-            return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
-        # Sinon retour au menu d'accueil
-        session["step"] = "WELCOME_CHOICE"
-        return build_response(WELCOME_TEXT, WELCOME_BTNS)
+        
+        # Pour les inscriptions : retour step par step selon le rôle
+        if current_step.startswith("SIGNUP_CLIENT_"):
+            step_order = ["SIGNUP_CLIENT_NAME", "SIGNUP_CLIENT_EMAIL", "SIGNUP_CLIENT_ADDRESS", "SIGNUP_CLIENT_PASSWORD"]
+            try:
+                current_idx = step_order.index(current_step)
+                if current_idx > 0:
+                    session["step"] = step_order[current_idx - 1]
+                    # Reformuler la question de l'étape précédente
+                    if step_order[current_idx - 1] == "SIGNUP_CLIENT_NAME":
+                        return build_response("👤 *Client* — Votre *nom complet* ?\nExemple : `Jean Mbemba`", ["🔙 Retour"])
+                    elif step_order[current_idx - 1] == "SIGNUP_CLIENT_EMAIL":
+                        return build_response("📧 *Client* — Votre *email* ?\nExemple : `nom.prenom@gmail.com`", ["🔙 Retour"])
+                    elif step_order[current_idx - 1] == "SIGNUP_CLIENT_ADDRESS":
+                        return build_response("🏠 Quelle est votre adresse principale ?\nExemple : `25 Avenue de la Paix, Brazzaville`", ["🔙 Retour"])
+                else:
+                    session["step"] = "SIGNUP_ROLE"
+                    return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+            except ValueError:
+                session["step"] = "SIGNUP_ROLE"
+                return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+        
+        elif current_step.startswith("SIGNUP_LIVREUR_"):
+            step_order = ["SIGNUP_LIVREUR_NAME", "SIGNUP_LIVREUR_EMAIL", "SIGNUP_LIVREUR_TYPE", 
+                         "SIGNUP_LIVREUR_VEHICULE", "SIGNUP_LIVREUR_PERMIS", "SIGNUP_LIVREUR_ZONE", "SIGNUP_LIVREUR_PASSWORD"]
+            try:
+                current_idx = step_order.index(current_step)
+                if current_idx > 0:
+                    session["step"] = step_order[current_idx - 1]
+                    # Reformuler selon l'étape
+                    prev_step = step_order[current_idx - 1]
+                    if prev_step == "SIGNUP_LIVREUR_NAME":
+                        return build_response("🚴 *Livreur* — Votre *nom complet* ?\nExemple : `Paul Ngoma`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_LIVREUR_EMAIL":
+                        return build_response("📧 *Livreur* — Votre *email* ?\nExemple : `livreur.exemple@gmail.com`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_LIVREUR_TYPE":
+                        return build_response("🏷️ *Type livreur* ?\nExemples : `independant`, `societe`, `autoentrepreneur`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_LIVREUR_VEHICULE":
+                        return build_response("🛵 *Type de véhicule* ?\nExemples : `moto`, `voiture`, `velo`, `camionnette`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_LIVREUR_PERMIS":
+                        return build_response("🧾 *Numéro de permis* ?\nExemple : `BZV-123456-2025`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_LIVREUR_ZONE":
+                        return build_response("🗺️ *Zone d'activité* ?\nExemples : `Brazzaville Centre`, `Poto-Poto`, `Talangaï`", ["🔙 Retour"])
+                else:
+                    session["step"] = "SIGNUP_ROLE"
+                    return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+            except ValueError:
+                session["step"] = "SIGNUP_ROLE"
+                return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+        
+        elif current_step.startswith("SIGNUP_MARCHAND_"):
+            # Ordre des étapes entreprise
+            step_order = ["SIGNUP_MARCHAND_ENTREPRISE", "SIGNUP_MARCHAND_TYPE", "SIGNUP_MARCHAND_DESC",
+                         "SIGNUP_MARCHAND_ADR", "SIGNUP_MARCHAND_GPS", "SIGNUP_MARCHAND_RCCM",
+                         "SIGNUP_MARCHAND_HOR", "SIGNUP_MARCHAND_CONTACT", "SIGNUP_MARCHAND_EMAIL", "SIGNUP_MARCHAND_PASSWORD"]
+            try:
+                current_idx = step_order.index(current_step)
+                if current_idx > 0:
+                    session["step"] = step_order[current_idx - 1]
+                    prev_step = step_order[current_idx - 1]
+                    # Reformuler selon l'étape
+                    if prev_step == "SIGNUP_MARCHAND_ENTREPRISE":
+                        return build_response("🏪 *Entreprise* — Nom de votre *entreprise* ?\nExemple : `Savana Restaurant`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_TYPE":
+                        resp = {
+                            "response": "🏷️ *Type d'entreprise* ?\nChoisissez une catégorie dans la liste ci-dessous :",
+                            "list": {
+                                "title": "Catégories",
+                                "rows": [
+                                    {"id": "restaurant", "title": "Restaurant", "description": "🍽️ Restaurant, café, fast-food"},
+                                    {"id": "pharmacie", "title": "Pharmacie", "description": "💊 Pharmacie, parapharmacie"},
+                                    {"id": "supermarche", "title": "Supermarché", "description": "🛒 Supermarché, épicerie"},
+                                    {"id": "boutique", "title": "Boutique", "description": "👕 Vêtements, accessoires"},
+                                    {"id": "electronique", "title": "Électronique", "description": "📱 High-tech, électroménager"},
+                                    {"id": "autre", "title": "Autre", "description": "🏢 Autre type d'activité"}
+                                ]
+                            }
+                        }
+                        return resp
+                    elif prev_step == "SIGNUP_MARCHAND_DESC":
+                        return build_response("📝 *Description* ?\nExemple : `Restaurant spécialisé en grillades africaines`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_ADR":
+                        return build_response("📍 *Adresse* de l'entreprise ?\nExemple : `Avenue des 3 Martyrs, Brazzaville`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_GPS":
+                        resp = build_response("📍 Pour vous localiser précisément, vous pouvez *envoyer votre position GPS* ou taper *Passer* pour continuer.", ["Passer", "🔙 Retour"])
+                        resp["ask_location"] = "📌 Envoyez votre *position GPS* ou tapez *Passer*."
+                        return resp
+                    elif prev_step == "SIGNUP_MARCHAND_RCCM":
+                        return build_response("🧾 *Numéro RCCM* ?\nExemple : `CG-BZV-01-2024-B12-00123`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_HOR":
+                        return build_response("⏰ *Horaires d'ouverture* ?\nExemple : `Lun-Sam 08h-20h`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_CONTACT":
+                        return build_response("👤 *Prénom Nom* du responsable ?\nExemple : `Pierre Mabiala`", ["🔙 Retour"])
+                    elif prev_step == "SIGNUP_MARCHAND_EMAIL":
+                        return build_response("📧 *Email* du responsable ?\nExemple : `responsable@entreprise.com`", ["🔙 Retour"])
+                else:
+                    session["step"] = "SIGNUP_ROLE"
+                    return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+            except ValueError:
+                session["step"] = "SIGNUP_ROLE"
+                return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
+        
+        # Défaut : retour au choix du rôle
+        session["step"] = "SIGNUP_ROLE"
+        return build_response("📝 Indiquez votre rôle sur TokTok :", SIGNUP_ROLE_BTNS + ["🔙 Retour"])
 
     # Choix rôle
     if session.get("step", "").startswith("SIGNUP_ROLE"):
