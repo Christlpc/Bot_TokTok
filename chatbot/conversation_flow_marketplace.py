@@ -389,6 +389,10 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     if step == "MARKET_CATEGORY":
         categories = session.get("market_categories", {})
 
+        # Si les catégories ne sont pas chargées, les charger maintenant
+        if not categories:
+            return _begin_marketplace(session)
+
         # Si le texte est vide (redirection depuis autre flow), afficher les catégories
         if not t:
             rows = []
