@@ -373,7 +373,8 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         if intent_change == "coursier":
             from .conversation_flow_coursier import flow_coursier_handle
             session["step"] = "COURIER_POSITION_TYPE"
-            return flow_coursier_handle(session, text)
+            # Ne pas passer le texte original
+            return flow_coursier_handle(session, "")
         
         elif intent_change == "follow":
             from .conversation_flow_coursier import handle_follow
@@ -387,6 +388,10 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     # ========== CATÉGORIES ==========
     if step == "MARKET_CATEGORY":
         categories = session.get("market_categories", {})
+
+        # Si le texte est vide (redirection depuis autre flow), afficher les catégories
+        if not t:
+            return _build_market_categories(session, categories)
 
         # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         category_name_to_id = {}

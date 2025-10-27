@@ -189,6 +189,7 @@ def whatsapp_webhook(request):
                     bot_output.get("response", ""),
                     bot_output["list"]["rows"],
                     bot_output["list"].get("title", "Missions"),
+                    bot_output["list"].get("button", "Choisir")
                 )
             
             # 4. Buttons

@@ -201,10 +201,11 @@ def send_whatsapp_contact(to: str, contact_name: str, contact_phone: str, messag
     print("Réponse API contact:", res.text)
     return res.json()
 
-def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "Options"):
+def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "Options", button: str = "Choisir"):
     """
-    Envoi d’un menu (list message) WhatsApp Cloud API.
+    Envoi d'un menu (list message) WhatsApp Cloud API.
     rows = [{"id": "accept_123", "title": "Accepter #123", "description": "Départ → Destination"}, ...]
+    button = Texte du bouton (par défaut "Choisir", max 20 chars)
     """
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -215,7 +216,7 @@ def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "
             "type": "list",
             "body": {"text": body_text},
             "action": {
-                "button": "Choisir",
+                "button": button[:20],  # Max 20 caractères
                 "sections": [{
                     "title": title,
                     "rows": rows

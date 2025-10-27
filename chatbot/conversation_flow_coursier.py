@@ -133,7 +133,14 @@ def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
             return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
         
         data = r.json() or {}
-        missions = data.get("results", [])[:3]
+        all_missions = data.get("results", [])
+        
+        # FILTRAGE PAR CLIENT : Ne montrer que les missions du client connecté
+        phone = session.get("phone", "")
+        missions = [
+            m for m in all_missions 
+            if m.get("contact_entreprise") == phone or m.get("entreprise_demandeur") == phone
+        ][:3]
 
         if not missions:
             return build_response(
@@ -180,7 +187,14 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
             return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
         
         data = r.json() or {}
-        all_missions = data.get("results", [])
+        all_missions_raw = data.get("results", [])
+        
+        # FILTRAGE PAR CLIENT : Ne rechercher que dans les missions du client connecté
+        phone = session.get("phone", "")
+        all_missions = [
+            m for m in all_missions_raw 
+            if m.get("contact_entreprise") == phone or m.get("entreprise_demandeur") == phone
+        ]
 
         if not all_missions:
             return build_response("❌ Vous n'avez aucune demande enregistrée.", MAIN_MENU_BTNS)
@@ -354,7 +368,8 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         if intent_change == "marketplace":
             from .conversation_flow_marketplace import flow_marketplace_handle
             session["step"] = "MARKET_CATEGORY"
-            return flow_marketplace_handle(session, text)
+            # Ne pas passer le texte original, laisser le marketplace afficher les catégories
+            return flow_marketplace_handle(session, "")
         
         elif intent_change == "follow":
             return handle_follow(session)
@@ -509,6 +524,17 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     
     # Gérer la réponse sur la position du client
     if step == "COURIER_POSITION_TYPE":
+        # Si texte vide (redirection depuis autre flow), afficher le choix de position
+        if not t:
+            return build_response(
+                "*📦 NOUVELLE DEMANDE DE LIVRAISON*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "[▓░░░░░░░░░] 10%\n\n"
+                "📍 *Où vous trouvez-vous actuellement ?*\n\n"
+                "👇 _Sélectionnez votre position_",
+                ["🚏 Au point de départ", "🎯 Au point d'arrivée", "🔙 Retour"]
+            )
+        
         # === SMART FALLBACK : Extraction si l'utilisateur donne directement l'adresse ===
         # Ex: "Je veux envoyer le colis à Marie à Moungali"
         if len(text) > 20 and not t in {"au point de depart", "depart", "point de depart", "au point d'arrivee", "arrivee", "1", "2"}:

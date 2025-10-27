@@ -4,6 +4,7 @@ import os, re, logging, requests
 from typing import Dict, Any, Optional, List
 from .auth_core import get_session, build_response, normalize  # sessions/menus centralisés
 from .smart_fallback import detect_intent_change
+from .geocoding_service import format_mission_for_livreur, estimate_distance_from_addresses
 
 logger = logging.getLogger(__name__)
 
@@ -75,30 +76,59 @@ def list_missions_disponibles(session: Dict[str, Any]) -> Dict[str, Any]:
     arr = r.json() or []
     if not arr:
         return build_response(
-            "😕 Aucune mission disponible pour l'instant.\n⏳ Reste en ligne : de nouvelles opportunités arrivent régulièrement.",
+            "*🚫 AUCUNE MISSION DISPONIBLE*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "⏳ _Aucune mission n'est disponible pour le moment._\n\n"
+            "💡 *Conseil :* Reste en ligne, de nouvelles missions arrivent régulièrement !\n\n"
+            "🔔 _Tu seras notifié dès qu'une mission est disponible._",
             MAIN_MENU_BTNS + ["🔙 Retour"]
         )
 
-    arr = arr[:3]  # limiter l’UI
+    arr = arr[:5]  # Afficher jusqu'à 5 missions
     session.setdefault("ctx", {})["last_list"] = [d.get("id") for d in arr]
 
-    lines, rows = [], []
+    rows = []
     for d in arr:
-        mid  = d.get("id")
-        dep  = d.get("adresse_recuperation") or "Adresse inconnue"
+        mid = d.get("id")
+        depart = d.get("adresse_recuperation") or "Adresse inconnue"
         dest = d.get("adresse_livraison") or "Adresse inconnue"
-        cod  = d.get("cod_montant") or d.get("montant_cod") or 0
-        cod_txt = _fmt_xaf(cod)
-        lines.append(f"#{mid} • {dep} → {dest}\n💵 Paiement à la livraison : {cod_txt} XAF")
+        coords_depart = d.get("coordonnees_recuperation")
+        coords_dest = d.get("coordonnees_livraison")
+        valeur = d.get("valeur_produit", 0)
+        
+        # Calculer la distance
+        dist_info = estimate_distance_from_addresses(depart, dest, coords_depart, coords_dest)
+        
+        # Titre de la liste (max 24 chars)
+        title = f"Mission #{mid}"
+        
+        # Description (max 72 chars) avec distance si disponible
+        if dist_info["success"]:
+            description = f"{dist_info['distance_text']} • {dist_info['estimated_time']} • {_fmt_xaf(valeur)} F"
+        else:
+            description = f"{depart[:30]}... → {dest[:20]}..."
+        
         rows.append({
-            "id": f"details_{mid}",
-            "title": f"📄 Mission #{mid}",
-            "description": (f"{dep} → {dest}")[:72]
+            "id": str(mid),
+            "title": title,
+            "description": description[:72]
         })
 
-    msg = "🆕 *Missions disponibles*\n\n" + "\n\n".join(lines)
-    # On renvoie un message de type "list" si ton intégration WhatsApp le supporte
-    return {"response": msg, "list": {"title": "👉 Choisis une mission", "rows": rows}}
+    msg = (
+        "*🆕 MISSIONS DISPONIBLES*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 *{len(arr)} mission(s)* en attente\n\n"
+        "👇 _Sélectionne une mission pour voir les détails_"
+    )
+    
+    return {
+        "response": msg, 
+        "list": {
+            "title": "👉 Voir les détails",
+            "button": "Missions",
+            "rows": rows
+        }
+    }
 
 # ---------- Mes missions ----------
 def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -115,24 +145,69 @@ def list_mes_missions(session: Dict[str, Any]) -> Dict[str, Any]:
 
     arr = r.json() or []
     if not arr:
-        return build_response("📭 Tu n'as aucune mission en cours.", MAIN_MENU_BTNS + ["🔙 Retour"])
+        return build_response(
+            "*📭 AUCUNE MISSION EN COURS*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🔍 _Tu n'as aucune mission en cours._\n\n"
+            "💡 *Pour commencer :*\n"
+            "Consulte les *📋 Missions* disponibles",
+            MAIN_MENU_BTNS + ["🔙 Retour"]
+        )
 
     # Filtrer par livreur_id si le backend ne le fait pas déjà
     en_cours = [d for d in arr if (d.get("statut") or "").lower() not in {"livree", "annulee"}]
     if not en_cours:
-        return build_response("📭 Tu n'as aucune mission en cours.", MAIN_MENU_BTNS + ["🔙 Retour"])
+        return build_response(
+            "*📭 AUCUNE MISSION EN COURS*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ _Toutes tes missions sont terminées !_\n\n"
+            "💡 *Pour continuer :*\n"
+            "Consulte les *📋 Missions* disponibles",
+            MAIN_MENU_BTNS + ["🔙 Retour"]
+        )
 
-    lines, rows = [], []
+    rows = []
     for d in en_cours[:5]:
-        mid  = d.get("id")
-        st   = (d.get("statut") or "—").replace("_", " ")
+        mid = d.get("id")
+        statut_raw = d.get("statut") or "—"
+        statut = statut_raw.replace("_", " ").title()
+        depart = d.get("adresse_recuperation", "—")
         dest = d.get("adresse_livraison", "—")
-        lines.append(f"#{mid} — {st} → {dest}")
-        rows.append({"id": f"details_{mid}", "title": f"📄 Mission #{mid}", "description": (f"{st} → {dest}")[:72]})
+        coords_depart = d.get("coordonnees_recuperation")
+        coords_dest = d.get("coordonnees_livraison")
+        
+        # Calculer la distance
+        dist_info = estimate_distance_from_addresses(depart, dest, coords_depart, coords_dest)
+        
+        # Titre (max 24 chars)
+        title = f"Mission #{mid}"
+        
+        # Description avec statut et distance
+        if dist_info["success"]:
+            description = f"{statut} • {dist_info['distance_text']} • {dist_info['estimated_time']}"
+        else:
+            description = f"{statut} • {dest[:40]}"
+        
+        rows.append({
+            "id": str(mid),
+            "title": title,
+            "description": description[:72]
+        })
 
+    msg = (
+        "*🚴 MES MISSIONS EN COURS*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 *{len(en_cours)} mission(s)* active(s)\n\n"
+        "👇 _Sélectionne une mission pour agir_"
+    )
+    
     return {
-        "response": "📦 *Tes missions en cours*\n" + "\n".join(lines),
-        "list": {"title": "👉 Choisis une mission", "rows": rows}
+        "response": msg,
+        "list": {
+            "title": "👉 Voir les détails",
+            "button": "Missions",
+            "rows": rows
+        }
     }
 
 # ---------- Détails mission ----------
@@ -142,6 +217,23 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
         return build_response("❌ Mission introuvable.", MAIN_MENU_BTNS + ["🔙 Retour"])
 
     d = r.json()
+    
+    # Utiliser le service de géolocalisation pour formatter la mission
+    formatted_mission = format_mission_for_livreur(d)
+    
+    # Ajouter les infos supplémentaires
+    client = d.get("entreprise_demandeur", "—")
+    tel_client = d.get("contact_entreprise", "—")
+    description = d.get("description_produit", "—")
+    statut = (d.get("statut") or "pending").replace("_", " ").title()
+    
+    msg = f"{formatted_mission}\n\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"👤 *Client :* {client}\n"
+    msg += f"📞 *Contact :* {tel_client}\n"
+    msg += f"📝 *Description :* {description}\n"
+    msg += f"📊 *Statut :* {statut}\n"
+    
     session.setdefault("ctx", {})["current_mission_id"] = d.get("id")
 
     # Compat : mémoriser l'id livraison si déjà lié
@@ -149,22 +241,14 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     if liv_id:
         session["ctx"]["current_livraison_id"] = liv_id
 
-    txt = (
-        f"📄 *Mission #{d.get('id','?')}*\n"
-        f"• Réf : {d.get('numero_mission','—')}\n"
-        f"• Départ : {d.get('adresse_recuperation','—')}\n"
-        f"• Destination : {d.get('adresse_livraison','—')}\n"
-        f"• Paiement : {d.get('type_paiement','—')}\n"
-        f"• Statut : {d.get('statut','—')}"
-    )
-
+    # Boutons dynamiques selon le statut
     st = (d.get("statut") or "").lower()
     if st == "en_attente":
-        return build_response(txt, _buttons(f"✅ Accepter {d.get('id')}", f"❌ Refuser {d.get('id')}", BTN_MENU))
+        return build_response(msg, _buttons(f"✅ Accepter {d.get('id')}", f"❌ Refuser {d.get('id')}", BTN_MENU))
     elif st in {"assignee", "assigned"}:
-        return build_response(txt, _buttons(BTN_DEMARRER, "🚴 Mes missions", BTN_MENU))
+        return build_response(msg, _buttons(BTN_DEMARRER, "🚴 Mes missions", BTN_MENU))
     else:
-        return build_response(txt, _buttons("🚴 Mes missions", BTN_MENU))
+        return build_response(msg, _buttons("🚴 Mes missions", BTN_MENU))
 
 # ---------- Accepter / Refuser ----------
 def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
