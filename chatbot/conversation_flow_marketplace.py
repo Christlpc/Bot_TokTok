@@ -237,7 +237,7 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             "notes_client": d.get("description") or "",
             "details": [{
                 "produit": int(produit.get("id", 0)),
-                "quantite": 1,
+                "quantite": int(d.get("quantity", 1)),
                 "prix_unitaire": float(produit.get("prix", 0)),
             }],
             "status": "en_attente",
@@ -292,7 +292,8 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
                 "*📍 LIVRAISON*\n"
                 f"_{d.get('depart', '—')}_\n\n"
                 "*📦 PRODUIT*\n"
-                f"_{d.get('market_choice', '—')}_\n\n"
+                f"_{d.get('market_choice', '—')}_\n"
+                f"Quantité : *{d.get('quantity', 1)}*\n\n"
                 "*💰 TOTAL*\n"
                 f"*{_fmt_fcfa(d.get('value_fcfa', 0))} FCFA*\n\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -539,9 +540,61 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session.setdefault("new_request", {})
         session["new_request"]["market_choice"] = produit.get("nom")
         session["new_request"]["description"] = (produit.get("description") or "").strip()
-        session["new_request"]["value_fcfa"] = produit.get("prix", 0)
-        session["step"] = "MARKET_DESTINATION"
+        session["new_request"]["unit_price"] = produit.get("prix", 0)
+        session["step"] = "MARKET_QUANTITY"
 
+        return build_response(
+            "*📦 QUANTITÉ*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*Produit :* _{produit.get('nom', '—')}_\n"
+            f"*Prix unitaire :* {_fmt_fcfa(produit.get('prix', 0))} FCFA\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🔢 *Combien en voulez-vous ?*\n\n"
+            "_Tapez un nombre_\n"
+            "_Exemple :_ `2`",
+            ["🔙 Retour"]
+        )
+
+    # ========== QUANTITÉ ==========
+    if step == "MARKET_QUANTITY":
+        if _is_retour(text):
+            session["step"] = "MARKET_PRODUCTS"
+            # Réafficher la liste des produits
+            produits = session.get("market_products_list", [])
+            if not produits:
+                return build_response("⚠️ Liste de produits vide.", ["🔙 Retour"])
+            
+            rows = []
+            for idx, p in enumerate(produits, start=1):
+                title, description = _build_product_title_and_desc(p)
+                rows.append({"id": str(idx), "title": title, "description": description})
+            
+            resp = build_response("📦 *Produits de " + _merchant_display_name(session.get("market_merchant", {})) + "*")
+            resp["list"] = {"rows": rows[:10], "button": "Voir produits", "title": "Produits"}
+            return resp
+        
+        # Valider la quantité
+        try:
+            qty = int(text.strip())
+            if qty < 1 or qty > 99:
+                raise ValueError("Quantité invalide")
+        except:
+            return build_response(
+                "⚠️ *Quantité invalide*\n\n"
+                "_Veuillez saisir un nombre entre 1 et 99_\n\n"
+                "_Exemple :_ `2`",
+                ["🔙 Retour"]
+            )
+        
+        # Enregistrer la quantité et calculer le total
+        session.setdefault("new_request", {})
+        session["new_request"]["quantity"] = qty
+        unit_price = session["new_request"].get("unit_price", 0)
+        total_price = unit_price * qty
+        session["new_request"]["value_fcfa"] = total_price
+        
+        session["step"] = "MARKET_DESTINATION"
+        
         resp = build_response(
             "*📍 ADRESSE DE LIVRAISON*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -557,7 +610,21 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     # ========== ADRESSE ==========
     if step == "MARKET_DESTINATION":
         if _is_retour(text):
-            session["step"] = "MARKET_PRODUCTS"
+            session["step"] = "MARKET_QUANTITY"
+            produit = session.get("selected_product", {})
+            return build_response(
+                "*📦 QUANTITÉ*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"*Produit :* _{produit.get('nom', '—')}_\n"
+                f"*Prix unitaire :* {_fmt_fcfa(produit.get('prix', 0))} FCFA\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "🔢 *Combien en voulez-vous ?*\n\n"
+                "_Tapez un nombre_\n"
+                "_Exemple :_ `2`",
+                ["🔙 Retour"]
+            )
+        
+        if text and not _is_retour(text) and text.strip().upper() != "LOCATION_SHARED":
             produits = session.get("market_products", {})
             rows = []
             for k in sorted(produits.keys(), key=lambda x: int(x)):
@@ -639,7 +706,9 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         d = session["new_request"]
         merchant = session.get("market_merchant", {})
         pickup_addr, _ = _merchant_pickup_info(merchant)
-        prix = _fmt_fcfa(d.get("value_fcfa", 0))
+        qty = d.get("quantity", 1)
+        unit_price = d.get("unit_price", 0)
+        total_price = d.get("value_fcfa", 0)
 
         # FIX #3: Utiliser PAYMENT_METHODS pour afficher le label correct
         payment_label = "Espèces" if payment_method == "espèces" else \
@@ -656,7 +725,9 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             f"🎯 Livraison : _{d.get('depart', '—')}_\n\n"
             "*📦 PRODUIT*\n"
             f"_{d.get('market_choice', '—')}_\n"
-            f"Prix : *{prix} FCFA*\n\n"
+            f"• Quantité : *{qty}*\n"
+            f"• Prix unitaire : {_fmt_fcfa(unit_price)} FCFA\n"
+            f"• *Total : {_fmt_fcfa(total_price)} FCFA*\n\n"
             "*💳 PAIEMENT*\n"
             f"_{payment_label}_\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"

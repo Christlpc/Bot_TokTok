@@ -13,12 +13,17 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # ---------- UI ----------
 WELCOME_TEXT = (
-    "👋 Bienvenue sur *TokTok Delivery* !\n"
-    "Prêt·e à envoyer ou recevoir un colis ?\n"
-    "Commencez par vous *connecter* ou *créer un compte*."
+    "*🚚 TOKTOK DELIVERY*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "✨ *Votre solution de livraison premium*\n\n"
+    "📦 Envoi de colis express\n"
+    "🛍️ Marketplace de produits locaux\n"
+    "🚴 Livreurs professionnels\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💡 _Connectez-vous pour commencer_"
 )
 
-WELCOME_BTNS = ["Connexion", "Inscription", "Aide"]
+WELCOME_BTNS = ["🔐 Connexion", "📝 Inscription", "❓ Aide"]
 SIGNUP_ROLE_BTNS = ["Client", "Livreur", "Entreprise"]
 
 # ---------- Helpers ----------
@@ -42,7 +47,20 @@ def build_response(text: str, buttons: Optional[List[str]] = None) -> Dict[str, 
     return r
 
 def normalize(s: str) -> str:
-    return " ".join((s or "").split()).strip().lower()
+    """Normalise un texte en retirant les émojis, espaces multiples et en minuscule"""
+    if not s:
+        return ""
+    # Retirer les émojis avec regex
+    import re
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F1E0-\U0001F1FF"  # flags
+        u"\U00002700-\U000027BF"  # dingbats
+        "]+", flags=re.UNICODE)
+    s = emoji_pattern.sub('', s)
+    return " ".join(s.split()).strip().lower()
 
 def _auth_headers(session: Dict[str, Any]) -> Dict[str, str]:
     h: Dict[str, str] = {}
