@@ -596,10 +596,17 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session["new_request"]["market_choice"] = produit.get("nom")
         session["new_request"]["description"] = (produit.get("description") or "").strip()
         # Convertir le prix en float dès le départ pour éviter les erreurs de multiplication
+        # Le prix peut être "2 500 FCFA" ou "2500" ou 2500
         prix_raw = produit.get("prix", 0)
         try:
-            prix_float = float(prix_raw) if prix_raw else 0
+            if isinstance(prix_raw, str):
+                # Nettoyer: enlever espaces, "FCFA", etc.
+                prix_clean = prix_raw.replace(" ", "").replace("FCFA", "").replace("fcfa", "").strip()
+                prix_float = float(prix_clean) if prix_clean else 0
+            else:
+                prix_float = float(prix_raw) if prix_raw else 0
         except (ValueError, TypeError):
+            logger.warning(f"[MARKET] Impossible de convertir prix: {prix_raw}")
             prix_float = 0
         
         session["new_request"]["unit_price"] = prix_float
