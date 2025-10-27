@@ -300,9 +300,13 @@ def detect_intent_change(user_input: str, current_flow: str) -> Optional[str]:
         if current_flow != "follow":
             return "follow"
     
-    if any(word in user_lower for word in ["nouvelle demande", "livraison", "envoyer colis", "coursier"]):
-        if current_flow != "coursier":
-            return "coursier"
+    # Détecter "nouvelle demande" SEULEMENT si pas déjà dans un flow actif
+    # Éviter de détecter "Nouvelle demande" qui peut être un bouton dans marketplace
+    if current_flow == "coursier":
+        # Dans coursier, on garde les redirections
+        pass
+    elif any(word in user_lower for word in ["livraison", "envoyer colis", "coursier"]):
+        return "coursier"
     
     # NE PAS intercepter "retour" - laissons les flows gérer ça eux-mêmes
     # On détecte seulement "menu" et "accueil" explicitement

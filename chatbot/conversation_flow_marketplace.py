@@ -578,7 +578,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session.setdefault("new_request", {})
         session["new_request"]["market_choice"] = produit.get("nom")
         session["new_request"]["description"] = (produit.get("description") or "").strip()
-        session["new_request"]["unit_price"] = produit.get("prix", 0)
+        # Convertir le prix en float dès le départ pour éviter les erreurs de multiplication
+        prix_raw = produit.get("prix", 0)
+        try:
+            prix_float = float(prix_raw) if prix_raw else 0
+        except (ValueError, TypeError):
+            prix_float = 0
+        
+        session["new_request"]["unit_price"] = prix_float
         session["step"] = "MARKET_QUANTITY"
 
         # Si le produit a une image, l'afficher
@@ -634,12 +641,15 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session.setdefault("new_request", {})
         session["new_request"]["quantity"] = qty
         
-        # Convertir unit_price en float (peut être string depuis l'API)
-        unit_price_raw = session["new_request"].get("unit_price", 0)
-        try:
-            unit_price = float(unit_price_raw) if unit_price_raw else 0
-        except (ValueError, TypeError):
-            unit_price = 0
+        # Le unit_price devrait déjà être un float (converti à l'étape MARKET_PRODUCTS)
+        unit_price = session["new_request"].get("unit_price", 0)
+        
+        # Sécurité supplémentaire : s'assurer que c'est bien un nombre
+        if not isinstance(unit_price, (int, float)):
+            try:
+                unit_price = float(unit_price)
+            except (ValueError, TypeError):
+                unit_price = 0
         
         total_price = unit_price * qty
         session["new_request"]["value_fcfa"] = total_price
