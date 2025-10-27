@@ -53,17 +53,34 @@ def _truncate_title(text: str, max_len: int = 24) -> str:
     return text[:max_len - 1] + "…"
 
 
-def _build_product_title(nom: str, prix: str) -> str:
-    """Construit un titre produit qui respecte les limites WhatsApp (24 chars)"""
+def _build_product_title_and_desc(nom: str, prix: Any, description: str = "") -> tuple[str, str]:
+    """
+    Construit un titre et une description pour un produit WhatsApp.
+    - Title (max 24 chars) : Nom du produit uniquement
+    - Description (max 72 chars) : Prix + description du produit
+    
+    Returns: (title, description)
+    """
     if not nom:
         nom = "Produit"
-    prix_str = f"{prix} FCFA"
-    separateur = " - "
-    # Calculer l'espace disponible pour le nom
-    max_nom_length = max(8, 24 - len(prix_str) - len(separateur))
-    title = f"{nom[:max_nom_length]} - {prix_str}"
-    # Double sécurité: tronquer à 24
-    return title[:24]
+    
+    # Title = Nom du produit (tronqué à 24 chars si nécessaire)
+    title = _truncate_title(nom, 24)
+    
+    # Description = Prix + description produit
+    prix_formatted = _fmt_fcfa(prix)
+    desc_parts = [f"💰 {prix_formatted} FCFA"]
+    
+    if description and description.strip():
+        # Ajouter la description du produit si elle existe
+        # On garde de la place pour le prix (environ 20 chars)
+        remaining_space = 72 - len(desc_parts[0]) - 3  # -3 pour " • "
+        if remaining_space > 10:
+            desc_clean = description.strip()[:remaining_space]
+            desc_parts.append(desc_clean)
+    
+    final_desc = " • ".join(desc_parts)
+    return title, final_desc[:72]  # Sécurité limite WhatsApp
 
 
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
@@ -235,24 +252,25 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             order_data = r.json()
             logger.info(f"[MARKET] create_order response: {order_data}")
             
-            # Récupérer l'ID avec plusieurs tentatives selon le format de réponse API
-            order_id = (
-                order_data.get("id") or 
-                order_data.get("commande_id") or 
-                order_data.get("order_id") or
-                (order_data.get("commande") or {}).get("id") or
-                (order_data.get("data") or {}).get("id") or
+            # Récupérer la référence commande (numero_commande en priorité, sinon ID)
+            order_ref = (
+                order_data.get("numero_commande") or 
+                order_data.get("commande", {}).get("numero_commande") if isinstance(order_data.get("commande"), dict) else None or
+                f"CMD-{order_data.get('id')}" if order_data.get("id") else None or
+                f"CMD-{order_data.get('commande_id')}" if order_data.get("commande_id") else None or
+                f"CMD-{order_data.get('order_id')}" if order_data.get("order_id") else None or
+                f"CMD-{order_data.get('commande', {}).get('id')}" if isinstance(order_data.get("commande"), dict) and order_data.get("commande", {}).get("id") else None or
                 "—"
             )
             
-            logger.info(f"[MARKET] order_id extracted: {order_id}")
+            logger.info(f"[MARKET] order_ref extracted: {order_ref}")
             
             _cleanup_marketplace_session(session)
             session["step"] = "MENU"
 
             recap = (
                 "✅ *Commande créée avec succès* !\n\n"
-                f"🔖 Numéro : *#{order_id}*\n"
+                f"🔖 Référence : *{order_ref}*\n"
                 f"🏪 Marchand : {_merchant_display_name(merchant)}\n"
                 f"📍 Livraison : {d.get('depart', '—')}\n"
                 f"💰 Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
@@ -430,13 +448,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         rows = []
         for i, p in enumerate(produits, start=1):
             nom = p.get("nom", "—")
-            prix = _fmt_fcfa(p.get("prix", 0))
-            # FIX #2: Utiliser _build_product_title pour respecter la limite de 24 chars WhatsApp
-            title = _build_product_title(nom, prix)
+            prix = p.get("prix", 0)
+            desc_produit = p.get("description", "")
+            # FIX UX: Séparer nom et prix pour éviter la troncature
+            title, description = _build_product_title_and_desc(nom, prix, desc_produit)
             rows.append({
                 "id": str(i),
                 "title": title,
-                "description": p.get("description", "")[:60] if p.get("description") else ""
+                "description": description
             })
 
         msg = f"📦 *Produits de {_merchant_display_name(merchant)}*"
@@ -445,6 +464,8 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
     # ========== PRODUITS ==========
     if step == "MARKET_PRODUCTS":
         produits = session.get("market_products", {})
+        logger.info(f"[MARKET] PRODUCTS step - received text: '{text}', normalized: '{t}'")
+        logger.info(f"[MARKET] Available product indices: {list(produits.keys())}")
 
         if _is_retour(text):
             session["step"] = "MARKET_MERCHANT"
@@ -460,40 +481,32 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             msg = "🔙 *Marchands*"
             return _build_list_response(msg, rows, section_title="Marchands")
 
-        # FIX : Extraire le nom du produit depuis le titre complet "Nom - Prix FCFA"
-        # WhatsApp renvoie le titre complet quand l'utilisateur clique
-        text_clean = text
-        if " - " in text and "FCFA" in text:
-            # Extraire la partie avant " - " qui est le nom du produit
-            text_clean = text.split(" - ")[0].strip()
-        
-        t_clean = normalize(text_clean)
-
-        # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
-        product_name_to_id = {}
-        for idx, prod in produits.items():
-            prod_name = normalize(prod.get("nom") or "")
-            if prod_name:
-                product_name_to_id[prod_name] = idx
-
-        # Chercher d'abord par indice direct
+        # Chercher par indice direct (l'ID est maintenant envoyé depuis views.py)
         if t not in produits:
-            # Ensuite par nom du produit (avec texte nettoyé)
-            if t_clean in product_name_to_id:
-                t = product_name_to_id[t_clean]         
+            # Fallback : créer un mapping texte → indice au cas où
+            product_name_to_id = {}
+            for idx, prod in produits.items():
+                prod_name = normalize(prod.get("nom") or "")
+                if prod_name:
+                    product_name_to_id[prod_name] = idx
+            
+            # Essayer de trouver par nom
+            if t in product_name_to_id:
+                t = product_name_to_id[t]
             else:
                 # Vraiment invalide
                 rows = []
                 for k in sorted(produits.keys(), key=lambda x: int(x)):
                     p = produits[k]
                     nom = p.get("nom", "—")
-                    prix = _fmt_fcfa(p.get("prix", 0))
-                    # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
-                    title = _build_product_title(nom, prix)
+                    prix = p.get("prix", 0)
+                    desc_produit = p.get("description", "")
+                    # FIX UX: Séparer nom et prix pour éviter la troncature
+                    title, description = _build_product_title_and_desc(nom, prix, desc_produit)
                     rows.append({
                         "id": k,
                         "title": title,
-                        "description": p.get("description", "")[:60] if p.get("description") else ""
+                        "description": description
                     })
                 msg = "⚠️ Choix invalide."
                 return _build_list_response(msg, rows, section_title="Produits")
@@ -523,13 +536,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             for k in sorted(produits.keys(), key=lambda x: int(x)):
                 p = produits[k]
                 nom = p.get("nom", "—")
-                prix = _fmt_fcfa(p.get("prix", 0))
-                # FIX #2: Utiliser _build_product_title pour respecter la limite WhatsApp
-                title = _build_product_title(nom, prix)
+                prix = p.get("prix", 0)
+                desc_produit = p.get("description", "")
+                # FIX UX: Séparer nom et prix pour éviter la troncature
+                title, description = _build_product_title_and_desc(nom, prix, desc_produit)
                 rows.append({
                     "id": k,
                     "title": title,
-                    "description": p.get("description", "")[:60] if p.get("description") else ""
+                    "description": description
                 })
             msg = "🔙 *Produits*"
             return _build_list_response(msg, rows, section_title="Produits")

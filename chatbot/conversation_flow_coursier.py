@@ -32,6 +32,144 @@ def api_request(session: Dict[str, Any], method: str, path: str, **kwargs):
     logger.debug(f"[API-C] {method} {path} -> {r.status_code}")
     return r
 
+# --- Suivi & Historique ---
+def handle_follow(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Affiche la liste des dernières demandes et demande la référence à suivre."""
+    session["step"] = "FOLLOW_WAIT"
+    try:
+        if not (session.get("auth") or {}).get("access"):
+            return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
+
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
+        if not r.ok:
+            logger.error(f"[FOLLOW_LIST] API error: {r.status_code}")
+            return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
+        
+        data = r.json() or {}
+        missions = data.get("results", [])[:3]
+
+        if not missions:
+            return build_response(
+                "*🗂️ HISTORIQUE*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Vous n'avez aucune demande en cours.\n\n"
+                "💡 _Créez votre première demande dès maintenant !_",
+                MAIN_MENU_BTNS
+            )
+
+        lignes = []
+        for m in missions:
+            ref_long = m.get("numero_mission", "-")
+            suffixe = ref_long.split("-")[-1] if ref_long else "?"
+            ref_courte = f"#{suffixe}"
+            statut = m.get("statut", "-")
+            dest = m.get("adresse_livraison", "-")
+            lignes.append(f"{ref_courte} → {dest} ({statut})")
+
+        txt = (
+            "*🔍 SUIVI DE VOS DEMANDES*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*Vos dernières demandes :*\n" + "\n".join(lignes) + "\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💡 *Entrez la référence pour voir les détails*\n\n"
+            "_Exemple :_ `COUR-20250919-003` ou `#003`"
+        )
+        return build_response(txt, ["🔙 Retour"])
+
+    except Exception as e:
+        logger.exception(f"[FOLLOW_LIST] error: {e}")
+        return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
+
+
+def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """Recherche et affiche les détails d'une demande spécifique."""
+    try:
+        if not (session.get("auth") or {}).get("access"):
+            return build_response("⚠️ Vous devez être connecté pour suivre vos demandes.", MAIN_MENU_BTNS)
+
+        r = api_request(session, "GET", "/api/v1/coursier/missions/")
+        if not r.ok:
+            logger.error(f"[FOLLOW_LOOKUP] API error: {r.status_code}")
+            return build_response("❌ Impossible de charger vos demandes.", MAIN_MENU_BTNS)
+        
+        data = r.json() or {}
+        all_missions = data.get("results", [])
+
+        if not all_missions:
+            return build_response("❌ Vous n'avez aucune demande enregistrée.", MAIN_MENU_BTNS)
+
+        ref = text.strip()
+        mission = None
+
+        # Recherche exacte par numero_mission
+        mission = next((m for m in all_missions if m.get("numero_mission") == ref), None)
+        
+        # Recherche par suffixe (#003)
+        if not mission and ref.lstrip("#").isdigit():
+            suffixe = ref.lstrip("#")
+            mission = next(
+                (m for m in all_missions if m.get("numero_mission", "").endswith(f"-{suffixe}")),
+                None
+            )
+        
+        # Recherche par alias M-ID
+        if not mission and ref.upper().startswith("M-") and ref[2:].isdigit():
+            alias = ref[2:]
+            mission = next(
+                (m for m in all_missions if str(m.get("id")) == alias),
+                None
+            )
+
+        if not mission:
+            return build_response(
+                "🔍 *Référence introuvable*\n\n"
+                f"Aucune demande ne correspond à `{ref}`.\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "💡 *Vérifiez la référence*\n"
+                "_Format :_ `COUR-20250919-003` ou `#003`\n\n"
+                "Ou tapez *Menu* pour revenir.",
+                ["Menu"]
+            )
+
+        # Récupérer les détails complets
+        mission_id = mission.get("id")
+        r2 = api_request(session, "GET", f"/api/v1/coursier/missions/{mission_id}/")
+        if not r2.ok:
+            logger.error(f"[FOLLOW_LOOKUP] details API error: {r2.status_code}")
+            return build_response("❌ Erreur lors du chargement des détails.", MAIN_MENU_BTNS)
+        
+        d = r2.json()
+
+        depart_aff = "Position partagée" if d.get("coordonnees_recuperation") else d.get("adresse_recuperation", "-")
+
+        recap = (
+            f"*📦 DEMANDE {d.get('numero_mission', '-')}*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*📊 Statut :* _{d.get('statut', '-')}_\n\n"
+            "*📍 ITINÉRAIRE*\n"
+            f"🚏 Départ : _{depart_aff}_\n"
+            f"🎯 Arrivée : _{d.get('adresse_livraison', '-')}_\n\n"
+            "*👤 DESTINATAIRE*\n"
+            f"• Nom : *{d.get('nom_client_final', '-')}*\n"
+            f"• Tél : `{d.get('telephone_client_final', '-')}`\n\n"
+            "*💰 VALEUR*\n"
+            f"{_fmt_fcfa(d.get('valeur_produit', 0))} FCFA\n"
+        )
+
+        if d.get("statut") in {"assigned", "en_route", "completed"}:
+            if d.get("livreur_nom"):
+                recap += f"\n🚴 Livreur : {d['livreur_nom']} ({d.get('livreur_telephone', '-')})\n"
+            if d.get("distance_estimee"):
+                recap += f"📏 Distance : {d['distance_estimee']}\n"
+
+        session["step"] = "MENU"
+        return build_response(recap.strip(), MAIN_MENU_BTNS)
+
+    except Exception as e:
+        logger.exception(f"[FOLLOW_LOOKUP] error: {e}")
+        return build_response("❌ Erreur lors du suivi de la demande.", MAIN_MENU_BTNS)
+
+
 # --- Création mission ---
 def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
     d = session.setdefault("new_request", {})
@@ -68,10 +206,15 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"[COURIER] mission reference: {ref}")
         
         msg = (
-            "🎉 *Demande enregistrée !*\n"
-            f"🔖 Référence : {ref}\n"
-            "🚴 Un·e livreur·se prendra la course très bientôt. "
-            "Vous recevrez une notification dès son affectation."
+            "🎉 *MISSION CRÉÉE AVEC SUCCÈS*\n\n"
+            f"*Référence :* `{ref}`\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*📍 ITINÉRAIRE*\n"
+            f"🚏 Départ : _{d.get('depart', '—')}_\n"
+            f"🎯 Arrivée : _{d.get('destination', '—')}_\n\n"
+            "*⏱️ STATUT ACTUEL*\n"
+            "🔍 _Recherche d'un livreur disponible..._\n\n"
+            "💡 *Vous recevrez une notification dès qu'un livreur acceptera votre demande.*"
         )
         # On nettoie le brouillon pour la prochaine demande
         session.pop("new_request", None)
@@ -80,8 +223,10 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"[COURIER] create_mission exception: {e}")
         return build_response(
-            "😓 Impossible de créer la demande pour le moment.\n"
-            "Veuillez réessayer dans quelques instants.",
+            "⚠️ *Erreur temporaire*\n\n"
+            "Nous n'avons pas pu créer votre demande.\n\n"
+            "🔄 _Veuillez réessayer dans quelques instants._\n\n"
+            "📞 _Si le problème persiste, contactez notre support._",
             MAIN_MENU_BTNS
         )
 
@@ -90,37 +235,106 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     step = session.get("step")
     t = normalize(text).lower() if text else ""
 
+    # Menu principal - Options disponibles
+    if t in {"suivre ma demande", "suivre", "2"}:
+        return handle_follow(session)
+    
+    if t in {"menu", "accueil"}:
+        session["step"] = "MENU"
+        session.pop("new_request", None)
+        return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
+
     # Gestion bouton retour contextuel - étape par étape
     if t in {"retour", "back", "🔙 retour"}:
         current_step = session.get("step", "")
         
+        # Retour depuis FOLLOW_WAIT vers menu
+        if current_step == "FOLLOW_WAIT":
+            session["step"] = "MENU"
+            return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
+        
+        # Récupérer la position du client pour navigation adaptée
+        d = session.get("new_request", {})
+        client_position = d.get("client_position")
+        
         # Navigation contexuelle selon l'étape
-        if current_step == "COURIER_DEPART":
+        if current_step == "COURIER_POSITION_TYPE":
             session["step"] = "MENU"
             session.pop("new_request", None)
             return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
-        elif current_step == "COURIER_DEST":
-            session["step"] = "COURIER_DEPART"
+        
+        elif current_step == "COURIER_DEPART_GPS":
+            session["step"] = "COURIER_POSITION_TYPE"
+            return build_response(
+                "📍 *Où vous trouvez-vous actuellement ?*\n\nCela nous permettra de mieux organiser la livraison.",
+                ["Au point de départ", "Au point d'arrivée", "🔙 Retour"]
+            )
+        
+        elif current_step == "COURIER_DEST_GPS":
+            session["step"] = "COURIER_POSITION_TYPE"
+            return build_response(
+                "📍 *Où vous trouvez-vous actuellement ?*\n\nCela nous permettra de mieux organiser la livraison.",
+                ["Au point de départ", "Au point d'arrivée", "🔙 Retour"]
+            )
+        
+        elif current_step == "COURIER_DEST_TEXT":
+            session["step"] = "COURIER_DEPART_GPS"
             resp = build_response(
-                "📍 Où récupérer le colis ?\n"
-                "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
-                "• ou *partagez votre position*.",
+                "📍 Parfait ! *Partagez votre position actuelle*\n(c'est là où le colis sera récupéré)",
                 ["🔙 Retour"]
             )
             resp["ask_location"] = True
             return resp
+        
+        elif current_step == "COURIER_DEPART_TEXT":
+            session["step"] = "COURIER_DEST_GPS"
+            resp = build_response(
+                "📍 Parfait ! *Partagez votre position actuelle*\n(c'est là où le colis sera livré)",
+                ["🔙 Retour"]
+            )
+            resp["ask_location"] = True
+            return resp
+        
         elif current_step == "DEST_NOM":
-            session["step"] = "COURIER_DEST"
-            return build_response("🎯 Et l'*adresse de destination* ? (ou partagez la position)", ["🔙 Retour"])
+            session["step"] = "COURIER_DEST_TEXT"
+            return build_response(
+                "📍 Maintenant, quelle est l'*adresse de destination* ?\nEx. `25 Rue Malanda, Poto-Poto`",
+                ["🔙 Retour"]
+            )
+        
+        elif current_step == "EXPEDITEUR_NOM":
+            session["step"] = "COURIER_DEPART_TEXT"
+            return build_response(
+                "📍 Maintenant, quelle est l'*adresse de départ* ?\n(d'où le colis doit être récupéré)\nEx. `10 Avenue de la Paix, BZV`",
+                ["🔙 Retour"]
+            )
+        
         elif current_step == "DEST_TEL":
             session["step"] = "DEST_NOM"
-            return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`", ["🔙 Retour"])
+            return build_response(
+                "👤 Quel est le *nom du destinataire* ?\n(la personne qui recevra le colis)\nEx. `Jean Malonga`",
+                ["🔙 Retour"]
+            )
+        
+        elif current_step == "EXPEDITEUR_TEL":
+            session["step"] = "EXPEDITEUR_NOM"
+            return build_response(
+                "👤 Quel est le *nom de l'expéditeur* ?\n(la personne qui détient le colis)\nEx. `Marie Okemba`",
+                ["🔙 Retour"]
+            )
+        
         elif current_step == "COURIER_VALUE":
-            session["step"] = "DEST_TEL"
+            # Retourner vers l'étape précédente selon la position du client
+            if client_position == "arrivee":
+                session["step"] = "EXPEDITEUR_TEL"
+            else:
+                session["step"] = "DEST_TEL"
             return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)", ["🔙 Retour"])
+        
         elif current_step == "COURIER_DESC":
             session["step"] = "COURIER_VALUE"
             return build_response("💰 Quelle est la *valeur estimée* du colis (en FCFA) ?\nEx. `15000`", ["🔙 Retour"])
+        
         elif current_step == "COURIER_CONFIRM":
             session["step"] = "COURIER_DESC"
             return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.", ["🔙 Retour"])
@@ -151,17 +365,50 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         session.pop("new_request", None)
         return build_response("🏠 Menu principal — que souhaitez-vous faire ?", MAIN_MENU_BTNS)
 
-    # Début du flow
+    # Début du flow - Demander où se trouve le client
     if step in {None, "MENU", "AUTHENTICATED"} and t in {"nouvelle demande", "1"}:
-        session["step"] = "COURIER_DEPART"
-        resp = build_response(
-            "📍 Top départ ! Où récupérer le colis ?\n"
-            "• Envoyez *l'adresse* (ex. `10 Avenue de la Paix, BZV`)\n"
-            "• ou *partagez votre position*.",
-            ["🔙 Retour"]
+        session.pop("new_request", None)  # Nettoyer au départ
+        session["step"] = "COURIER_POSITION_TYPE"
+        return build_response(
+            "*📦 NOUVELLE DEMANDE DE LIVRAISON*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "[░░░░░░░░░░] 0% · _Initialisation_\n\n"
+            "📍 *Où vous trouvez-vous actuellement ?*\n\n"
+            "_Cela nous permettra de mieux organiser la livraison._",
+            ["Au point de départ", "Au point d'arrivée", "🔙 Retour"]
         )
-        resp["ask_location"] = True
-        return resp
+    
+    # Gérer la réponse sur la position du client
+    if step == "COURIER_POSITION_TYPE":
+        if t in {"au point de depart", "depart", "point de depart", "1"}:
+            session.setdefault("new_request", {})["client_position"] = "depart"
+            session["step"] = "COURIER_DEPART_GPS"
+            resp = build_response(
+                "[▓▓░░░░░░░░] 20% · _Position de départ_\n\n"
+                "📍 *Partagez votre position actuelle*\n\n"
+                "_C'est là où le colis sera récupéré_\n\n"
+                "💡 _Appuyez sur le 📎 puis \"Position\"_",
+                ["🔙 Retour"]
+            )
+            resp["ask_location"] = True
+            return resp
+        elif t in {"au point d'arrivee", "arrivee", "point d'arrivee", "destination", "2"}:
+            session.setdefault("new_request", {})["client_position"] = "arrivee"
+            session["step"] = "COURIER_DEST_GPS"
+            resp = build_response(
+                "[▓▓░░░░░░░░] 20% · _Position d'arrivée_\n\n"
+                "📍 *Partagez votre position actuelle*\n\n"
+                "_C'est là où le colis sera livré_\n\n"
+                "💡 _Appuyez sur le 📎 puis \"Position\"_",
+                ["🔙 Retour"]
+            )
+            resp["ask_location"] = True
+            return resp
+        else:
+            return build_response(
+                "⚠️ Veuillez choisir une option :",
+                ["Au point de départ", "Au point d'arrivée", "🔙 Retour"]
+            )
 
     # Localisation partagée (reçue depuis WhatsApp)
     if (lat is not None and lng is not None) or (text and text.strip().upper() == "LOCATION_SHARED"):
@@ -171,77 +418,170 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             lat = last_loc.get("latitude")
             lng = last_loc.get("longitude")
         
-        if step == "COURIER_DEPART" and lat and lng:
-            nr = session.setdefault("new_request", {})
-            nr["depart"] = "Position partagée"
+        nr = session.setdefault("new_request", {})
+        client_position = nr.get("client_position")
+        
+        # Cas 1: Client est au point de départ (partage sa position = départ)
+        if step == "COURIER_DEPART_GPS" and lat and lng:
+            nr["depart"] = "Position actuelle"
             nr["coordonnees_gps"] = f"{lat},{lng}"
             nr["latitude_depart"] = lat
             nr["longitude_depart"] = lng
-            session["step"] = "COURIER_DEST"
-            resp = build_response(
-                "✅ Position de départ enregistrée.\n"
-                "🎯 Où livrer le colis ? Adresse ou partage de position.",
+            session["step"] = "COURIER_DEST_TEXT"
+            return build_response(
+                "[▓▓▓▓░░░░░░] 40% · _Adresse de destination_\n\n"
+                "✅ *Point de départ enregistré !*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📍 *Quelle est l'adresse de destination ?*\n\n"
+                "_Exemple :_ `25 Rue Malanda, Poto-Poto`",
                 ["🔙 Retour"]
             )
-            resp["ask_location"] = True
-            return resp
-
-        if step == "COURIER_DEST" and lat and lng:
-            nr = session.setdefault("new_request", {})
-            nr["destination"] = "Position partagée"
+        
+        # Cas 2: Client est au point d'arrivée (partage sa position = destination)
+        if step == "COURIER_DEST_GPS" and lat and lng:
+            nr["destination"] = "Position actuelle"
             nr["coordonnees_livraison"] = f"{lat},{lng}"
             nr["latitude_arrivee"] = lat
             nr["longitude_arrivee"] = lng
-            session["step"] = "DEST_NOM"
-            return build_response("✅ Destination enregistrée.\n👤 Quel est le *nom du destinataire* ?", ["🔙 Retour"])
+            session["step"] = "COURIER_DEPART_TEXT"
+            return build_response(
+                "[▓▓▓▓░░░░░░] 40% · _Adresse de départ_\n\n"
+                "✅ *Point d'arrivée enregistré !*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📍 *Quelle est l'adresse de départ ?*\n\n"
+                "_D'où le colis doit être récupéré_\n\n"
+                "_Exemple :_ `10 Avenue de la Paix, BZV`",
+                ["🔙 Retour"]
+            )
 
-    # Étapes classiques
-    if step == "COURIER_DEPART":
-        session.setdefault("new_request", {})["depart"] = text
-        session["step"] = "COURIER_DEST"
-        return build_response("🎯 Et l'*adresse de destination* ? (ou partagez la position)", ["🔙 Retour"])
-
-    if step == "COURIER_DEST":
-        session["new_request"]["destination"] = text
+    # Adresse de destination en texte (quand client est au départ)
+    if step == "COURIER_DEST_TEXT":
+        nr = session.setdefault("new_request", {})
+        nr["destination"] = text
         session["step"] = "DEST_NOM"
-        return build_response("👤 Quel est le *nom du destinataire* ? \n Ex. `Jean Malonga`", ["🔙 Retour"])
+        return build_response(
+            "[▓▓▓▓▓▓░░░░] 60% · _Contact destinataire_\n\n"
+            "👤 *Quel est le nom du destinataire ?*\n\n"
+            "_La personne qui recevra le colis_\n\n"
+            "_Exemple :_ `Marie Okemba`",
+            ["🔙 Retour"]
+        )
+    
+    # Adresse de départ en texte (quand client est à l'arrivée)
+    if step == "COURIER_DEPART_TEXT":
+        nr = session.setdefault("new_request", {})
+        nr["depart"] = text
+        session["step"] = "EXPEDITEUR_NOM"
+        return build_response(
+            "[▓▓▓▓▓▓░░░░] 60% · _Contact expéditeur_\n\n"
+            "👤 *Quel est le nom de l'expéditeur ?*\n\n"
+            "_La personne qui détient le colis_\n\n"
+            "_Exemple :_ `Pierre Nkounkou`",
+            ["🔙 Retour"]
+        )
 
+    # Nom du destinataire (quand client est au départ)
     if step == "DEST_NOM":
         session["new_request"]["destinataire_nom"] = text
         session["step"] = "DEST_TEL"
         return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)", ["🔙 Retour"])
+    
+    # Nom de l'expéditeur (quand client est à l'arrivée)
+    if step == "EXPEDITEUR_NOM":
+        session["new_request"]["expediteur_nom"] = text
+        session["step"] = "EXPEDITEUR_TEL"
+        return build_response("📞 Son *numéro de téléphone* ? (ex. `06 555 00 00`)", ["🔙 Retour"])
 
+    # Téléphone du destinataire (quand client est au départ)
     if step == "DEST_TEL":
-        # on normalise léger pour l'affichage ultérieur (mais on n'impose pas de format)
         tel = re.sub(r"\s+", " ", text).strip()
         session["new_request"]["destinataire_tel"] = tel
+        # Copier aussi vers contact_autre pour uniformiser
+        session["new_request"]["contact_autre_nom"] = session["new_request"].get("destinataire_nom")
+        session["new_request"]["contact_autre_tel"] = tel
         session["step"] = "COURIER_VALUE"
-        return build_response("💰 Quelle est la *valeur estimée* du colis (en FCFA) ?\nEx. `15000`", ["🔙 Retour"])
+        return build_response(
+            "[▓▓▓▓▓▓▓▓░░] 80% · _Détails du colis_\n\n"
+            "💰 *Valeur estimée du colis* (en FCFA)\n\n"
+            "_Cela nous permet d'assurer votre envoi_\n\n"
+            "_Exemple :_ `5000`",
+            ["🔙 Retour"]
+        )
+    
+    # Téléphone de l'expéditeur (quand client est à l'arrivée)
+    if step == "EXPEDITEUR_TEL":
+        tel = re.sub(r"\s+", " ", text).strip()
+        session["new_request"]["expediteur_tel"] = tel
+        # On garde l'expéditeur dans destinataire_nom/tel pour l'API (car c'est le contact du colis)
+        session["new_request"]["destinataire_nom"] = session["new_request"].get("expediteur_nom")
+        session["new_request"]["destinataire_tel"] = tel
+        session["step"] = "COURIER_VALUE"
+        return build_response(
+            "[▓▓▓▓▓▓▓▓░░] 80% · _Détails du colis_\n\n"
+            "💰 *Valeur estimée du colis* (en FCFA)\n\n"
+            "_Cela nous permet d'assurer votre envoi_\n\n"
+            "_Exemple :_ `5000`",
+            ["🔙 Retour"]
+        )
 
     if step == "COURIER_VALUE":
         digits = re.sub(r"[^0-9]", "", text or "")
         amt = int(digits) if digits else None
         if not amt:
-            return build_response("⚠️ Montant invalide. Saisissez un nombre (ex. `15000`).", ["🔙 Retour"])
+            return build_response(
+                "⚠️ *Format incorrect*\n\n"
+                "_Veuillez saisir uniquement des chiffres_\n\n"
+                "_Exemple :_ `5000`",
+                ["🔙 Retour"]
+            )
         session["new_request"]["value_fcfa"] = amt
         session["step"] = "COURIER_DESC"
-        return build_response("📦 Décrivez brièvement le colis.  \nEx. `Dossier A4 scellé, Paquet 2 kg`.", ["🔙 Retour"])
+        return build_response(
+            "[▓▓▓▓▓▓▓▓▓░] 90% · _Description_\n\n"
+            "📦 *Décrivez brièvement le colis*\n\n"
+            "_En quelques mots, que contient-il ?_\n\n"
+            "_Exemple :_ `Documents A4, Paquet 2 kg`",
+            ["🔙 Retour"]
+        )
 
     if step == "COURIER_DESC":
         session["new_request"]["description"] = text
         session["step"] = "COURIER_CONFIRM"
         d = session["new_request"]
-        dest_aff = "Position partagée" if d.get("coordonnees_livraison") else d.get("destination")
+        
+        # Affichage adapté selon la position du client
+        client_position = d.get("client_position")
+        dest_aff = "Position actuelle" if d.get("coordonnees_livraison") else d.get("destination", "—")
+        depart_aff = "Position actuelle" if d.get("coordonnees_gps") else d.get("depart", "—")
+        
+        # Déterminer le contact à afficher
+        if client_position == "arrivee":
+            contact_label = "Expéditeur"
+            contact_nom = d.get('expediteur_nom', '—')
+            contact_tel = d.get('expediteur_tel', '—')
+        else:
+            contact_label = "Destinataire"
+            contact_nom = d.get('destinataire_nom', '—')
+            contact_tel = d.get('destinataire_tel', '—')
+        
         recap = (
-            "📝 *Récapitulatif*\n"
-            f"• Départ : {d.get('depart')}\n"
-            f"• Destination : {dest_aff}\n"
-            f"• Destinataire : {d.get('destinataire_nom')} ({d.get('destinataire_tel')})\n"
-            f"• Valeur : {_fmt_fcfa(d.get('value_fcfa'))} FCFA\n"
-            f"• Description : {d.get('description')}\n\n"
-            "Tout est bon ?"
+            "[▓▓▓▓▓▓▓▓▓▓] 100% · _Validation_\n\n"
+            "*📝 RÉCAPITULATIF DE VOTRE DEMANDE*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*🚏 Point de départ*\n"
+            f"📍 _{depart_aff}_\n\n"
+            "*🎯 Point d'arrivée*\n"
+            f"📍 _{dest_aff}_\n\n"
+            f"*👤 {contact_label}*\n"
+            f"• Nom : *{contact_nom}*\n"
+            f"• Tél : `{contact_tel}`\n\n"
+            "*📦 Colis*\n"
+            f"• Contenu : _{d.get('description', '—')}_\n"
+            f"• Valeur : *{_fmt_fcfa(d.get('value_fcfa'))} FCFA*\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ _Tout est correct ?_"
         )
-        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
+        return build_response(recap, ["✅ Confirmer", "✏️ Modifier", "🔙 Retour"])
 
     if step == "COURIER_CONFIRM":
         if t in {"confirmer", "oui", "ok"}:
@@ -258,7 +598,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
                 ["Départ", "Destination", "Destinataire", "Valeur", "Description"]
             )
 
-    # Si l’utilisateur demande une modification précise (micro-raccourcis)
+    # Si l'utilisateur demande une modification précise (micro-raccourcis)
     if step == "COURIER_EDIT":
         choice = t
         if "départ" in choice:
@@ -278,9 +618,13 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             return build_response("✏️ Modif *Description* — décrivez le colis en une phrase.")
         # si choix non reconnu
         return build_response(
-            "Je n’ai pas compris. Que voulez-vous modifier ?",
+            "Je n'ai pas compris. Que voulez-vous modifier ?",
             ["Départ", "Destination", "Destinataire", "Valeur", "Description"]
         )
+
+    # Suivi de commande - L'utilisateur a saisi une référence
+    if step == "FOLLOW_WAIT":
+        return follow_lookup(session, text)
 
     # fallback IA (petite garde-fou UX)
     if text:

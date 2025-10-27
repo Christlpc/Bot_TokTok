@@ -94,7 +94,9 @@ def whatsapp_webhook(request):
                     elif row_id.startswith("details_"):
                         text = f"Détails {row_id.split('_',1)[1]}"
                     else:
-                        text = row.get("title") or "Menu"
+                        # FIX: Utiliser l'ID numérique au lieu du title pour éviter les problèmes avec les noms tronqués
+                        # Si l'ID est numérique, c'est un indice de liste (catégorie, marchand, produit)
+                        text = row_id if row_id else (row.get("title") or "Menu")
 
             # Image
             elif msg_type == "image":

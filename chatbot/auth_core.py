@@ -132,18 +132,33 @@ def fetch_role_profile(session: Dict[str, Any], role: str) -> Dict[str, Any]:
 def route_to_role_menu(session: Dict[str, Any], role: str, intro_text: str) -> Dict[str, Any]:
     if role == "livreur":
         return build_response(
-            intro_text + "\n- *Missions dispo*\n- *Mes missions*\n- *Basculer statut*",
-            ["Missions dispo", "Mes missions", "Basculer statut"]
+            intro_text + "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*📊 TABLEAU DE BORD*\n"
+            "🔍 Missions disponibles\n"
+            "📜 Mes livraisons\n"
+            "⚡ Gérer ma disponibilité\n\n"
+            "💪 _Prêt à livrer !_",
+            ["🔍 Missions dispo", "📜 Mes missions", "⚡ Statut"]
         )
     if role == "entreprise":
         return build_response(
-            intro_text + "\n- *Créer produit*\n- *Mes produits*\n- *Commandes*",
-            ["Créer produit", "Mes produits", "Commandes"]
+            intro_text + "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*📊 GESTION BOUTIQUE*\n"
+            "➕ Créer un produit\n"
+            "📦 Voir mes produits\n"
+            "🛒 Gérer les commandes\n\n"
+            "🎯 _Développez votre business !_",
+            ["➕ Créer produit", "📦 Mes produits", "🛒 Commandes"]
         )
     # client par défaut
     return build_response(
-        intro_text + "\n- *Nouvelle demande*\n- *Suivre ma demande*\n- *Marketplace*",
-        ["Nouvelle demande", "Suivre ma demande", "Marketplace"]
+        intro_text + "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*Que souhaitez-vous faire ?*\n"
+        "📦 Envoyer un colis\n"
+        "🔍 Suivre vos livraisons\n"
+        "🛍️ Commander des produits\n\n"
+        "✨ _À votre service !_",
+        ["📦 Nouvelle demande", "🔍 Suivre", "🛍️ Marketplace"]
     )
 
 # ---------- Login commun ----------
