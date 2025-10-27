@@ -157,6 +157,50 @@ def send_whatsapp_media_id(to: str, media_id: str, kind: str = "image", caption:
     print("Réponse API media_id:", res.text)
     return res.json()
 
+def send_whatsapp_contact(to: str, contact_name: str, contact_phone: str, message: Optional[str] = None):
+    """
+    Envoie une carte de contact WhatsApp
+    
+    Args:
+        to: Numéro du destinataire
+        contact_name: Nom du contact
+        contact_phone: Numéro du contact (format international: +XXX...)
+        message: Message optionnel avant la carte
+    """
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    
+    # Nettoyer le numéro de téléphone
+    phone_clean = contact_phone.replace(" ", "").replace("+", "").replace("-", "")
+    if not phone_clean.startswith("+"):
+        phone_clean = f"+{phone_clean}"
+    
+    # Format du contact WhatsApp
+    contact_payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "contacts",
+        "contacts": [{
+            "name": {
+                "formatted_name": contact_name,
+                "first_name": contact_name.split()[0] if contact_name else "Livreur"
+            },
+            "phones": [{
+                "phone": phone_clean,
+                "type": "CELL",
+                "wa_id": phone_clean.replace("+", "")
+            }]
+        }]
+    }
+    
+    # Envoyer le message d'abord si fourni
+    if message:
+        send_whatsapp_message(to, message)
+    
+    # Envoyer la carte de contact
+    res = requests.post(WHATSAPP_URL, headers=headers, json=contact_payload)
+    print("Réponse API contact:", res.text)
+    return res.json()
+
 def send_whatsapp_list(to: str, body_text: str, rows: List[dict], title: str = "Options"):
     """
     Envoi d’un menu (list message) WhatsApp Cloud API.

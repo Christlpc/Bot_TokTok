@@ -13,6 +13,7 @@ from .utils import (
 )
 from .router import handle_incoming        # ⇦ point d'entrée unique
 from .auth_core import get_session         # ⇦ sessions partagées
+from .analytics import analytics           # ⇦ tracking métriques
 
 logger = logging.getLogger(__name__)
 VERIFY_TOKEN = "toktok_secret"
@@ -153,11 +154,35 @@ def whatsapp_webhook(request):
                 send_whatsapp_location_request(from_number)
                 return JsonResponse({"status": "ok"}, status=200)
 
-            # Réponse selon type (ask_location a la priorité)
-            if bot_output.get("ask_location"):
-                # Utiliser le message de réponse s'il est présent, sinon le message par défaut
+            # Réponse selon type (priorité : media > ask_location > list > buttons > text)
+            
+            # 1. Media (image, video, document)
+            if bot_output.get("media"):
+                media_cfg = bot_output["media"]
+                media_type = media_cfg.get("type", "image")
+                media_url = media_cfg.get("url")
+                media_caption = media_cfg.get("caption", bot_output.get("response", ""))
+                
+                if media_url:
+                    from .utils import send_whatsapp_media_url
+                    send_whatsapp_media_url(from_number, media_url, kind=media_type, caption=media_caption)
+                    
+                    # Si des boutons sont présents, les envoyer après l'image
+                    if bot_output.get("buttons"):
+                        send_whatsapp_buttons(from_number, bot_output.get("response", ""), bot_output["buttons"])
+                else:
+                    # Fallback si pas d'URL
+                    if bot_output.get("buttons"):
+                        send_whatsapp_buttons(from_number, bot_output.get("response", ""), bot_output["buttons"])
+                    else:
+                        send_whatsapp_message(from_number, bot_output.get("response", ""))
+            
+            # 2. Location request
+            elif bot_output.get("ask_location"):
                 msg_txt = bot_output.get("response") or "📍 Merci de partager votre localisation."
                 send_whatsapp_location_request(from_number, msg_txt)
+            
+            # 3. List
             elif "list" in bot_output:
                 send_whatsapp_list(
                     from_number,
@@ -165,12 +190,22 @@ def whatsapp_webhook(request):
                     bot_output["list"]["rows"],
                     bot_output["list"].get("title", "Missions"),
                 )
+            
+            # 4. Buttons
             elif bot_output.get("buttons"):
                 send_whatsapp_buttons(from_number, bot_output.get("response", ""), bot_output["buttons"])
+            
+            # 5. Text simple
             else:
                 send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
 
         except Exception as e:
             logger.exception(f"[WA_WEBHOOK] Exception: {e}")
+            # Track l'erreur
+            analytics.track_error(
+                error_type="webhook_exception",
+                error_msg=str(e),
+                phone=from_number if 'from_number' in locals() else None
+            )
 
         return JsonResponse({"status": "ok"}, status=200)

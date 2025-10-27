@@ -5,6 +5,7 @@ import os, logging, requests, re
 from typing import Dict, Any, Optional, List, Tuple
 from .auth_core import get_session, build_response, normalize
 from .conversation_flow import ai_fallback
+from .analytics import analytics
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,18 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             
             logger.info(f"[MARKET] order_ref extracted: {order_ref}")
             
+            # Track conversion
+            try:
+                value = float(d.get("value_fcfa", 0))
+                analytics.track_conversion(
+                    session.get("phone"),
+                    "order_created",
+                    value,
+                    {"order_ref": order_ref, "product": d.get("market_choice")}
+                )
+            except Exception as e:
+                logger.warning(f"[MARKET] Could not track conversion: {e}")
+            
             _cleanup_marketplace_session(session)
             session["step"] = "MENU"
 
@@ -543,7 +556,9 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session["new_request"]["unit_price"] = produit.get("prix", 0)
         session["step"] = "MARKET_QUANTITY"
 
-        return build_response(
+        # Si le produit a une image, l'afficher
+        image_url = produit.get("image") or produit.get("photo")
+        resp = build_response(
             "*📦 QUANTITÉ*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"*Produit :* _{produit.get('nom', '—')}_\n"
@@ -554,6 +569,16 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             "_Exemple :_ `2`",
             ["🔙 Retour"]
         )
+        
+        # Ajouter l'image si disponible
+        if image_url and isinstance(image_url, str) and image_url.startswith("http"):
+            resp["media"] = {
+                "type": "image",
+                "url": image_url,
+                "caption": f"📦 {produit.get('nom', '—')}\n💰 {_fmt_fcfa(produit.get('prix', 0))} FCFA"
+            }
+        
+        return resp
 
     # ========== QUANTITÉ ==========
     if step == "MARKET_QUANTITY":

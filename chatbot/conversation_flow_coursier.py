@@ -4,6 +4,7 @@ import os, re, logging, requests
 from typing import Dict, Any, Optional
 from .auth_core import get_session, build_response, normalize
 from .conversation_flow import ai_fallback  # réutilise la fonction IA
+from .analytics import analytics
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,86 @@ def _fmt_fcfa(n: int | str | None) -> str:
         return f"{i:,}".replace(",", " ")
     except Exception:
         return str(n or 0)
+
+def _format_mission_status_timeline(statut: str) -> str:
+    """
+    Affiche le statut de la mission avec une timeline visuelle
+    
+    Args:
+        statut: Statut de la mission (pending, accepted, in_transit, delivered, etc.)
+    
+    Returns:
+        String formaté avec timeline et émojis
+    """
+    statut_lower = (statut or "").lower()
+    
+    # Timeline visuelle selon le statut
+    if statut_lower in {"pending", "en_attente", "new"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "🔵 Demande créée\n"
+            "⚪ Livreur assigné\n"
+            "⚪ Récupération\n"
+            "⚪ En transit\n"
+            "⚪ Livré\n\n"
+            "⏱️ *Statut actuel :* _En attente d'un livreur_"
+        )
+    
+    elif statut_lower in {"accepted", "assigned", "confirme"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "✅ Demande créée\n"
+            "🔵 Livreur assigné\n"
+            "⚪ Récupération\n"
+            "⚪ En transit\n"
+            "⚪ Livré\n\n"
+            "⏱️ *Statut actuel :* _En route vers le départ_"
+        )
+    
+    elif statut_lower in {"pickup_arrived", "arrive_pickup", "au_depart"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "✅ Demande créée\n"
+            "✅ Livreur assigné\n"
+            "🔵 Récupération\n"
+            "⚪ En transit\n"
+            "⚪ Livré\n\n"
+            "⏱️ *Statut actuel :* _Récupération en cours_"
+        )
+    
+    elif statut_lower in {"in_transit", "en_route", "picked_up"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "✅ Demande créée\n"
+            "✅ Livreur assigné\n"
+            "✅ Récupération\n"
+            "🔵 En transit\n"
+            "⚪ Livré\n\n"
+            "⏱️ *Statut actuel :* _En route vers la destination_"
+        )
+    
+    elif statut_lower in {"delivered", "livree", "completed", "termine"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "✅ Demande créée\n"
+            "✅ Livreur assigné\n"
+            "✅ Récupération\n"
+            "✅ En transit\n"
+            "✅ Livré\n\n"
+            "🎉 *Statut actuel :* _Livraison terminée !_"
+        )
+    
+    elif statut_lower in {"cancelled", "annule", "canceled"}:
+        return (
+            "*📊 TIMELINE*\n"
+            "✅ Demande créée\n"
+            "❌ Mission annulée\n\n"
+            "⚠️ *Statut actuel :* _Annulée_"
+        )
+    
+    else:
+        # Statut inconnu
+        return f"*📊 Statut :* _{statut}_"
 
 def _headers(session: Dict[str, Any]) -> Dict[str, str]:
     tok = (session.get("auth") or {}).get("access")
@@ -142,10 +223,14 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
 
         depart_aff = "Position partagée" if d.get("coordonnees_recuperation") else d.get("adresse_recuperation", "-")
 
+        # Formater le statut avec icône et timeline
+        statut = d.get('statut', '-')
+        statut_display = _format_mission_status_timeline(statut)
+        
         recap = (
             f"*📦 DEMANDE {d.get('numero_mission', '-')}*\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"*📊 Statut :* _{d.get('statut', '-')}_\n\n"
+            f"{statut_display}\n\n"
             "*📍 ITINÉRAIRE*\n"
             f"🚏 Départ : _{depart_aff}_\n"
             f"🎯 Arrivée : _{d.get('adresse_livraison', '-')}_\n\n"
@@ -155,6 +240,13 @@ def follow_lookup(session: Dict[str, Any], text: str) -> Dict[str, Any]:
             "*💰 VALEUR*\n"
             f"{_fmt_fcfa(d.get('valeur_produit', 0))} FCFA\n"
         )
+        
+        # Ajouter info livreur si disponible
+        if d.get('livreur_nom'):
+            recap += f"\n*🚴 LIVREUR*\n• {d['livreur_nom']}"
+            if d.get('livreur_telephone'):
+                recap += f"\n• Tél : `{d['livreur_telephone']}`"
+            recap += "\n"
 
         if d.get("statut") in {"assigned", "en_route", "completed"}:
             if d.get("livreur_nom"):
@@ -204,6 +296,18 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
         ref = mission.get("numero_mission") or f"M-{mission_id}"
         
         logger.info(f"[COURIER] mission reference: {ref}")
+        
+        # Track conversion
+        try:
+            value = float(d.get("value_fcfa", 0))
+            analytics.track_conversion(
+                session.get("phone"),
+                "mission_created",
+                value,
+                {"mission_ref": ref, "mission_id": mission_id}
+            )
+        except Exception as e:
+            logger.warning(f"[COURIER] Could not track conversion: {e}")
         
         msg = (
             "🎉 *MISSION CRÉÉE AVEC SUCCÈS*\n\n"
