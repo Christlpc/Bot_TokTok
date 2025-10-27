@@ -253,15 +253,30 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             logger.info(f"[MARKET] create_order response: {order_data}")
             
             # Récupérer la référence commande (numero_commande en priorité, sinon ID)
-            order_ref = (
-                order_data.get("numero_commande") or 
-                order_data.get("commande", {}).get("numero_commande") if isinstance(order_data.get("commande"), dict) else None or
-                f"CMD-{order_data.get('id')}" if order_data.get("id") else None or
-                f"CMD-{order_data.get('commande_id')}" if order_data.get("commande_id") else None or
-                f"CMD-{order_data.get('order_id')}" if order_data.get("order_id") else None or
-                f"CMD-{order_data.get('commande', {}).get('id')}" if isinstance(order_data.get("commande"), dict) and order_data.get("commande", {}).get("id") else None or
-                "—"
-            )
+            import time
+            order_ref = None
+            
+            # Tentative 1: numero_commande direct
+            if not order_ref and order_data.get("numero_commande"):
+                order_ref = order_data.get("numero_commande")
+            
+            # Tentative 2: numero_commande dans objet commande imbriqué
+            if not order_ref and isinstance(order_data.get("commande"), dict):
+                order_ref = order_data.get("commande", {}).get("numero_commande")
+            
+            # Tentative 3-5: IDs divers
+            if not order_ref and order_data.get("id"):
+                order_ref = f"CMD-{order_data['id']}"
+            elif not order_ref and order_data.get("commande_id"):
+                order_ref = f"CMD-{order_data['commande_id']}"
+            elif not order_ref and order_data.get("order_id"):
+                order_ref = f"CMD-{order_data['order_id']}"
+            
+            # Dernier recours: générer une référence temporaire unique
+            if not order_ref:
+                timestamp = int(time.time()) % 10000
+                phone_suffix = session.get("phone", "0000")[-4:]
+                order_ref = f"CMD-{phone_suffix}-{timestamp}"
             
             logger.info(f"[MARKET] order_ref extracted: {order_ref}")
             
@@ -269,11 +284,19 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             session["step"] = "MENU"
 
             recap = (
-                "✅ *Commande créée avec succès* !\n\n"
-                f"🔖 Référence : *{order_ref}*\n"
-                f"🏪 Marchand : {_merchant_display_name(merchant)}\n"
-                f"📍 Livraison : {d.get('depart', '—')}\n"
-                f"💰 Total : {_fmt_fcfa(d.get('value_fcfa', 0))} FCFA"
+                "🎉 *COMMANDE CRÉÉE AVEC SUCCÈS !*\n\n"
+                f"*Référence :* `{order_ref}`\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "*🏪 MARCHAND*\n"
+                f"_{_merchant_display_name(merchant)}_\n\n"
+                "*📍 LIVRAISON*\n"
+                f"_{d.get('depart', '—')}_\n\n"
+                "*📦 PRODUIT*\n"
+                f"_{d.get('market_choice', '—')}_\n\n"
+                "*💰 TOTAL*\n"
+                f"*{_fmt_fcfa(d.get('value_fcfa', 0))} FCFA*\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✨ _Votre commande sera préparée et livrée dans les meilleurs délais._"
             )
             return build_response(recap, MAIN_MENU_BTNS)
         else:
@@ -520,9 +543,13 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         session["step"] = "MARKET_DESTINATION"
 
         resp = build_response(
-            "📍 Où livrer ?\n"
-            "• Envoyez *l'adresse*\n"
-            "• ou *partagez votre position*"
+            "*📍 ADRESSE DE LIVRAISON*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✍️ *Tapez votre adresse*\n"
+            "_Exemple :_ `25 Rue Malanda, Poto-Poto`\n\n"
+            "*OU*\n\n"
+            "📱 *Partagez votre position*\n"
+            "💡 _Appuyez sur le 📎 puis \"Position\"_"
         )
         resp["ask_location"] = True
         return resp
@@ -563,8 +590,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 session["new_request"]["latitude"] = lat
                 session["new_request"]["longitude"] = lng
                 session["step"] = "MARKET_PAY"
-                return build_response("💳 Mode de paiement :",
-                                      ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+                return build_response(
+                    "*💳 MODE DE PAIEMENT*\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "_Choisissez votre mode de paiement :_",
+                    ["💵 Espèces", "📱 Mobile Money", "🏦 Virement", "🔙 Retour"]
+                )
         
         # Gérer l'adresse textuelle
         if text and not _is_retour(text) and text.strip().upper() != "LOCATION_SHARED":
@@ -572,8 +603,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             session["new_request"]["depart"] = text
             session["new_request"]["coordonnees_gps"] = ""
             session["step"] = "MARKET_PAY"
-            return build_response("💳 Mode de paiement :",
-                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+            return build_response(
+                "*💳 MODE DE PAIEMENT*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "_Choisissez votre mode de paiement :_",
+                ["💵 Espèces", "📱 Mobile Money", "🏦 Virement", "🔙 Retour"]
+            )
         
         # Sinon redemander
         resp = build_response("⚠️ Besoin d'une adresse ou position.")
@@ -591,8 +626,11 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         # FIX #3: Utiliser PAYMENT_METHODS avec normalize()
         key = normalize(text)
         if key not in PAYMENT_METHODS:
-            return build_response("🙏 Choix invalide. Choisissez:",
-                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+            return build_response(
+                "⚠️ *Choix invalide*\n\n"
+                "_Veuillez sélectionner un mode de paiement :_",
+                ["💵 Espèces", "📱 Mobile Money", "🏦 Virement", "🔙 Retour"]
+            )
 
         payment_method = PAYMENT_METHODS[key]
         session.setdefault("new_request", {})["payment_method"] = payment_method
@@ -609,21 +647,33 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                 "Virement"
 
         recap = (
-            "📝 *Récapitulatif*\n"
-            f"• Marchand : {_merchant_display_name(merchant)}\n"
-            f"• Retrait : {pickup_addr}\n"
-            f"• Livraison : {d.get('depart', '—')}\n"
-            f"• Produit : {d.get('market_choice', '—')} — {prix} FCFA\n"
-            f"• Paiement : {payment_label}"
+            "*📝 RÉCAPITULATIF DE VOTRE COMMANDE*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*🏪 MARCHAND*\n"
+            f"_{_merchant_display_name(merchant)}_\n\n"
+            "*📍 ITINÉRAIRE*\n"
+            f"🏪 Retrait : _{pickup_addr}_\n"
+            f"🎯 Livraison : _{d.get('depart', '—')}_\n\n"
+            "*📦 PRODUIT*\n"
+            f"_{d.get('market_choice', '—')}_\n"
+            f"Prix : *{prix} FCFA*\n\n"
+            "*💳 PAIEMENT*\n"
+            f"_{payment_label}_\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ _Tout est correct ?_"
         )
-        return build_response(recap, ["Confirmer", "Modifier", "🔙 Retour"])
+        return build_response(recap, ["✅ Confirmer", "✏️ Modifier", "🔙 Retour"])
 
     # ========== CONFIRMATION ==========
     if step == "MARKET_CONFIRM":
         if _is_retour(text):
             session["step"] = "MARKET_PAY"
-            return build_response("💳 Mode de paiement :",
-                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+            return build_response(
+                "*💳 MODE DE PAIEMENT*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "_Choisissez votre mode de paiement :_",
+                ["💵 Espèces", "📱 Mobile Money", "🏦 Virement", "🔙 Retour"]
+            )
 
         # FIX #4: Vérifier la confirmation EN PREMIER avec tous les variants
         t_lower = normalize(text)
@@ -635,8 +685,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         # Modifier
         if t_lower in {"modifier", "editer", "change", "changer", "2"}:
             session["step"] = "MARKET_PAY"
-            return build_response("💳 Mode de paiement :",
-                                  ["Espèces", "Mobile Money", "Virement", "🔙 Retour"])
+            return build_response(
+                "*💳 MODE DE PAIEMENT*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "_Choisissez votre mode de paiement :_",
+                ["💵 Espèces", "📱 Mobile Money", "🏦 Virement", "🔙 Retour"]
+            )
 
         # Annuler
         if t_lower in {"annuler", "non", "cancel", "no", "3"}:

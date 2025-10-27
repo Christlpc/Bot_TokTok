@@ -153,8 +153,12 @@ def whatsapp_webhook(request):
                 send_whatsapp_location_request(from_number)
                 return JsonResponse({"status": "ok"}, status=200)
 
-            # Réponse selon type
-            if "list" in bot_output:
+            # Réponse selon type (ask_location a la priorité)
+            if bot_output.get("ask_location"):
+                # Utiliser le message de réponse s'il est présent, sinon le message par défaut
+                msg_txt = bot_output.get("response") or "📍 Merci de partager votre localisation."
+                send_whatsapp_location_request(from_number, msg_txt)
+            elif "list" in bot_output:
                 send_whatsapp_list(
                     from_number,
                     bot_output.get("response", ""),
@@ -163,9 +167,6 @@ def whatsapp_webhook(request):
                 )
             elif bot_output.get("buttons"):
                 send_whatsapp_buttons(from_number, bot_output.get("response", ""), bot_output["buttons"])
-            elif bot_output.get("ask_location"):
-                msg_txt = bot_output["ask_location"] if isinstance(bot_output["ask_location"], str) else None
-                send_whatsapp_location_request(from_number, msg_txt or "📍 Merci de partager votre localisation.")
             else:
                 send_whatsapp_message(from_number, bot_output.get("response", "❌ Erreur interne."))
 

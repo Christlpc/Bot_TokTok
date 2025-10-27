@@ -236,7 +236,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     t = normalize(text).lower() if text else ""
 
     # Menu principal - Options disponibles
-    if t in {"suivre ma demande", "suivre", "2"}:
+    if t in {"suivre ma demande", "suivre", "2"} or "suivre" in t:
         return handle_follow(session)
     
     if t in {"menu", "accueil"}:
@@ -366,7 +366,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         return build_response("🏠 Menu principal — que souhaitez-vous faire ?", MAIN_MENU_BTNS)
 
     # Début du flow - Demander où se trouve le client
-    if step in {None, "MENU", "AUTHENTICATED"} and t in {"nouvelle demande", "1"}:
+    if step in {None, "MENU", "AUTHENTICATED"} and (t in {"nouvelle demande", "1"} or "nouvelle demande" in t):
         session.pop("new_request", None)  # Nettoyer au départ
         session["step"] = "COURIER_POSITION_TYPE"
         return build_response(
@@ -380,7 +380,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     
     # Gérer la réponse sur la position du client
     if step == "COURIER_POSITION_TYPE":
-        if t in {"au point de depart", "depart", "point de depart", "1"}:
+        if t in {"au point de depart", "depart", "point de depart", "1"} or "depart" in t:
             session.setdefault("new_request", {})["client_position"] = "depart"
             session["step"] = "COURIER_DEPART_GPS"
             resp = build_response(
@@ -392,7 +392,7 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
             )
             resp["ask_location"] = True
             return resp
-        elif t in {"au point d'arrivee", "arrivee", "point d'arrivee", "destination", "2"}:
+        elif t in {"au point d'arrivee", "arrivee", "point d'arrivee", "destination", "2"} or "arrivee" in t or "arrivée" in t:
             session.setdefault("new_request", {})["client_position"] = "arrivee"
             session["step"] = "COURIER_DEST_GPS"
             resp = build_response(
