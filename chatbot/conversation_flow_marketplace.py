@@ -671,8 +671,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         # Sécurité supplémentaire : s'assurer que c'est bien un nombre
         if not isinstance(unit_price, (int, float)):
             try:
-                unit_price = float(unit_price)
+                # Si c'est une string, nettoyer avant de convertir
+                if isinstance(unit_price, str):
+                    unit_price_clean = unit_price.replace(" ", "").replace("FCFA", "").replace("fcfa", "").strip()
+                    unit_price = float(unit_price_clean) if unit_price_clean else 0
+                else:
+                    unit_price = float(unit_price)
             except (ValueError, TypeError):
+                logger.warning(f"[MARKET_QTY] Impossible de convertir unit_price: {unit_price}")
                 unit_price = 0
         
         total_price = unit_price * qty
