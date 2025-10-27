@@ -633,7 +633,14 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         # Enregistrer la quantité et calculer le total
         session.setdefault("new_request", {})
         session["new_request"]["quantity"] = qty
-        unit_price = session["new_request"].get("unit_price", 0)
+        
+        # Convertir unit_price en float (peut être string depuis l'API)
+        unit_price_raw = session["new_request"].get("unit_price", 0)
+        try:
+            unit_price = float(unit_price_raw) if unit_price_raw else 0
+        except (ValueError, TypeError):
+            unit_price = 0
+        
         total_price = unit_price * qty
         session["new_request"]["value_fcfa"] = total_price
         

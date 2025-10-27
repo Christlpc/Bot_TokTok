@@ -304,7 +304,9 @@ def detect_intent_change(user_input: str, current_flow: str) -> Optional[str]:
         if current_flow != "coursier":
             return "coursier"
     
-    if any(word in user_lower for word in ["retour", "menu", "accueil", "annuler"]):
+    # NE PAS intercepter "retour" - laissons les flows gérer ça eux-mêmes
+    # On détecte seulement "menu" et "accueil" explicitement
+    if any(word in user_lower for word in ["menu principal", "accueil"]):
         return "menu"
     
     # Utiliser l'IA si disponible pour les cas ambigus
