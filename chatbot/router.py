@@ -2,7 +2,7 @@
 from __future__ import annotations
 import importlib, inspect, logging, time
 from typing import Dict, Any, Optional
-from .auth_core import get_session, ensure_auth_or_ask_password
+from .auth_core import get_session, ensure_auth_or_ask_password, normalize
 
 logger = logging.getLogger("toktok.router")
 
@@ -146,7 +146,8 @@ def handle_incoming(
     }
 
     # Conditions pour aller vers marketplace
-    tnorm = (text or "").lower().strip()
+    # IMPORTANT : Utiliser normalize() pour enlever les emojis
+    tnorm = normalize(text or "").lower()
     current_step = session.get("step")
 
     # Debug log pour comprendre le routage

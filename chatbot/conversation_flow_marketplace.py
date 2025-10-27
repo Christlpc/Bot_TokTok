@@ -391,7 +391,15 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
 
         # Si le texte est vide (redirection depuis autre flow), afficher les catégories
         if not t:
-            return _build_market_categories(session, categories)
+            rows = []
+            for k in sorted(categories.keys(), key=lambda x: int(x)):
+                cat = categories[k]
+                rows.append({
+                    "id": k,
+                    "title": (cat.get("nom") or cat.get("name", ""))[:30]
+                })
+            msg = "🛍️ *Sélectionnez une catégorie*"
+            return _build_list_response(msg, rows, section_title="Catégories")
 
         # FIX #1: Créer un mapping texte → indice pour les boutons interactifs
         category_name_to_id = {}
