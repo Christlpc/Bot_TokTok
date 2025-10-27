@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, re, logging, requests
 from typing import Dict, Any, Optional, List
 from .auth_core import get_session, build_response, normalize  # sessions/menus centralisés
+from .smart_fallback import detect_intent_change
 
 logger = logging.getLogger(__name__)
 

@@ -136,6 +136,7 @@ def handle_incoming(
         "MARKET_CATEGORY",
         "MARKET_MERCHANT",
         "MARKET_PRODUCTS",
+        "MARKET_QUANTITY",     # ← AJOUTÉ - Étape quantité
         "MARKET_DESTINATION",  # ← AJOUTÉ (c'était manquant)
         "MARKET_PAY",
         "MARKET_CONFIRM",

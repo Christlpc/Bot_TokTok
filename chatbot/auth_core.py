@@ -5,6 +5,14 @@ from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("toktok.auth")
 
+# Import Smart Fallback pour les réponses intelligentes
+try:
+    from .smart_fallback import detect_intent_change
+    SMART_FALLBACK_AVAILABLE = True
+except ImportError:
+    SMART_FALLBACK_AVAILABLE = False
+    logger.warning("[AUTH] Smart Fallback not available")
+
 API_BASE = os.getenv("TOKTOK_BASE_URL", "https://toktok-bsfz.onrender.com")
 TIMEOUT = int(os.getenv("TOKTOK_TIMEOUT", "15"))
 

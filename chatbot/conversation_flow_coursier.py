@@ -5,6 +5,12 @@ from typing import Dict, Any, Optional
 from .auth_core import get_session, build_response, normalize
 from .conversation_flow import ai_fallback  # réutilise la fonction IA
 from .analytics import analytics
+from .smart_fallback import (
+    extract_structured_data,
+    smart_validate,
+    detect_intent_change,
+    generate_smart_error_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +344,25 @@ def courier_create(session: Dict[str, Any]) -> Dict[str, Any]:
 def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
     step = session.get("step")
     t = normalize(text).lower() if text else ""
+    
+    # === SMART FALLBACK : Détection d'intention ===
+    # Vérifier si l'utilisateur veut changer de flow
+    intent_change = detect_intent_change(text, "coursier")
+    if intent_change and intent_change != "coursier":
+        logger.info(f"[SMART] Intent change detected: coursier → {intent_change}")
+        
+        if intent_change == "marketplace":
+            from .conversation_flow_marketplace import flow_marketplace_handle
+            session["step"] = "MARKET_CATEGORY"
+            return flow_marketplace_handle(session, text)
+        
+        elif intent_change == "follow":
+            return handle_follow(session)
+        
+        elif intent_change == "menu":
+            session["step"] = "MENU"
+            session.pop("new_request", None)
+            return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
 
     # Menu principal - Options disponibles
     if t in {"suivre ma demande", "suivre", "2"} or "suivre" in t:
@@ -484,6 +509,38 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     
     # Gérer la réponse sur la position du client
     if step == "COURIER_POSITION_TYPE":
+        # === SMART FALLBACK : Extraction si l'utilisateur donne directement l'adresse ===
+        # Ex: "Je veux envoyer le colis à Marie à Moungali"
+        if len(text) > 20 and not t in {"au point de depart", "depart", "point de depart", "au point d'arrivee", "arrivee", "1", "2"}:
+            extracted = extract_structured_data(
+                user_input=text,
+                current_step=step,
+                current_flow="coursier",
+                context=session.get("new_request", {})
+            )
+            
+            if extracted["confidence"] > 0.6:
+                logger.info(f"[SMART] Extracted from COURIER_POSITION_TYPE: {extracted}")
+                nr = session.setdefault("new_request", {})
+                fields = extracted["extracted_fields"]
+                
+                # Remplir les champs trouvés
+                if fields.get("adresse_destination"):
+                    nr["dest"] = fields["adresse_destination"]
+                    nr["client_position"] = "depart"  # Si on a destination, client doit être au départ
+                    session["step"] = "COURIER_DEPART_GPS"
+                    
+                    resp = build_response(
+                        f"✅ *Destination enregistrée :* {fields['adresse_destination']}\n\n"
+                        "[▓▓░░░░░░░░] 20% · _Position de départ_\n\n"
+                        "📍 *Partagez votre position actuelle*\n\n"
+                        "_C'est là où le colis sera récupéré_",
+                        ["🔙 Retour"]
+                    )
+                    resp["ask_location"] = True
+                    return resp
+        
+        # Cas standard : choix départ/arrivée
         if t in {"au point de depart", "depart", "point de depart", "1"} or "depart" in t:
             session.setdefault("new_request", {})["client_position"] = "depart"
             session["step"] = "COURIER_DEPART_GPS"
@@ -598,13 +655,21 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
 
     # Téléphone du destinataire (quand client est au départ)
     if step == "DEST_TEL":
-        tel = re.sub(r"\s+", " ", text).strip()
-        session["new_request"]["destinataire_tel"] = tel
+        # === SMART FALLBACK : Validation intelligente du téléphone ===
+        is_valid, extracted_value, error_msg = smart_validate(text, "phone", step)
+        
+        if not is_valid:
+            error = generate_smart_error_message(text, "phone", step)
+            return build_response(error, ["🔙 Retour"])
+        
+        session["new_request"]["destinataire_tel"] = extracted_value
         # Copier aussi vers contact_autre pour uniformiser
         session["new_request"]["contact_autre_nom"] = session["new_request"].get("destinataire_nom")
-        session["new_request"]["contact_autre_tel"] = tel
+        session["new_request"]["contact_autre_tel"] = extracted_value
         session["step"] = "COURIER_VALUE"
+        
         return build_response(
+            f"✅ *Téléphone enregistré :* {extracted_value}\n\n"
             "[▓▓▓▓▓▓▓▓░░] 80% · _Détails du colis_\n\n"
             "💰 *Valeur estimée du colis* (en FCFA)\n\n"
             "_Cela nous permet d'assurer votre envoi_\n\n"
@@ -614,13 +679,21 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
     
     # Téléphone de l'expéditeur (quand client est à l'arrivée)
     if step == "EXPEDITEUR_TEL":
-        tel = re.sub(r"\s+", " ", text).strip()
-        session["new_request"]["expediteur_tel"] = tel
+        # === SMART FALLBACK : Validation intelligente du téléphone ===
+        is_valid, extracted_value, error_msg = smart_validate(text, "phone", step)
+        
+        if not is_valid:
+            error = generate_smart_error_message(text, "phone", step)
+            return build_response(error, ["🔙 Retour"])
+        
+        session["new_request"]["expediteur_tel"] = extracted_value
         # On garde l'expéditeur dans destinataire_nom/tel pour l'API (car c'est le contact du colis)
         session["new_request"]["destinataire_nom"] = session["new_request"].get("expediteur_nom")
-        session["new_request"]["destinataire_tel"] = tel
+        session["new_request"]["destinataire_tel"] = extracted_value
         session["step"] = "COURIER_VALUE"
+        
         return build_response(
+            f"✅ *Téléphone enregistré :* {extracted_value}\n\n"
             "[▓▓▓▓▓▓▓▓░░] 80% · _Détails du colis_\n\n"
             "💰 *Valeur estimée du colis* (en FCFA)\n\n"
             "_Cela nous permet d'assurer votre envoi_\n\n"
@@ -629,18 +702,19 @@ def flow_coursier_handle(session: Dict[str, Any], text: str, lat: Optional[float
         )
 
     if step == "COURIER_VALUE":
-        digits = re.sub(r"[^0-9]", "", text or "")
-        amt = int(digits) if digits else None
-        if not amt:
-            return build_response(
-                "⚠️ *Format incorrect*\n\n"
-                "_Veuillez saisir uniquement des chiffres_\n\n"
-                "_Exemple :_ `5000`",
-                ["🔙 Retour"]
-            )
-        session["new_request"]["value_fcfa"] = amt
+        # === SMART FALLBACK : Validation intelligente du montant ===
+        is_valid, extracted_value, error_msg = smart_validate(text, "amount", step)
+        
+        if not is_valid:
+            # Message d'erreur personnalisé
+            error = generate_smart_error_message(text, "amount", step)
+            return build_response(error, ["🔙 Retour"])
+        
+        session["new_request"]["value_fcfa"] = extracted_value
         session["step"] = "COURIER_DESC"
+        
         return build_response(
+            f"✅ *Valeur enregistrée :* {extracted_value} FCFA\n\n"
             "[▓▓▓▓▓▓▓▓▓░] 90% · _Description_\n\n"
             "📦 *Décrivez brièvement le colis*\n\n"
             "_En quelques mots, que contient-il ?_\n\n"

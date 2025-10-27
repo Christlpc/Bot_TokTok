@@ -6,6 +6,12 @@ from typing import Dict, Any, Optional, List, Tuple
 from .auth_core import get_session, build_response, normalize
 from .conversation_flow import ai_fallback
 from .analytics import analytics
+from .smart_fallback import (
+    extract_structured_data,
+    smart_validate,
+    detect_intent_change,
+    generate_smart_error_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +364,25 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
                             lng: Optional[float] = None) -> Dict[str, Any]:
     step = session.get("step", "MARKET_CATEGORY")
     t = normalize(text) if text else ""
+    
+    # === SMART FALLBACK : Détection d'intention ===
+    intent_change = detect_intent_change(text, "marketplace")
+    if intent_change and intent_change != "marketplace":
+        logger.info(f"[SMART] Intent change detected: marketplace → {intent_change}")
+        
+        if intent_change == "coursier":
+            from .conversation_flow_coursier import flow_coursier_handle
+            session["step"] = "COURIER_POSITION_TYPE"
+            return flow_coursier_handle(session, text)
+        
+        elif intent_change == "follow":
+            from .conversation_flow_coursier import handle_follow
+            return handle_follow(session)
+        
+        elif intent_change == "menu":
+            session["step"] = "MENU"
+            _cleanup_marketplace_session(session)
+            return build_response("🏠 Menu principal", MAIN_MENU_BTNS)
 
     # ========== CATÉGORIES ==========
     if step == "MARKET_CATEGORY":
@@ -598,18 +623,12 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             resp["list"] = {"rows": rows[:10], "button": "Voir produits", "title": "Produits"}
             return resp
         
-        # Valider la quantité
-        try:
-            qty = int(text.strip())
-            if qty < 1 or qty > 99:
-                raise ValueError("Quantité invalide")
-        except:
-            return build_response(
-                "⚠️ *Quantité invalide*\n\n"
-                "_Veuillez saisir un nombre entre 1 et 99_\n\n"
-                "_Exemple :_ `2`",
-                ["🔙 Retour"]
-            )
+        # === SMART FALLBACK : Validation intelligente de la quantité ===
+        is_valid, qty, error_msg = smart_validate(text, "quantity", step)
+        
+        if not is_valid:
+            error = generate_smart_error_message(text, "quantity", step)
+            return build_response(error, ["🔙 Retour"])
         
         # Enregistrer la quantité et calculer le total
         session.setdefault("new_request", {})
