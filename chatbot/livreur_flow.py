@@ -218,22 +218,32 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
 
     d = r.json()
     
-    # Utiliser le service de géolocalisation pour formatter la mission
+    # Utiliser le service de géolocalisation pour formatter la mission (format premium)
     formatted_mission = format_mission_for_livreur(d)
     
-    # Ajouter les infos supplémentaires
+    # Ajouter les infos supplémentaires avec style premium
     client = d.get("entreprise_demandeur", "—")
     tel_client = d.get("contact_entreprise", "—")
     description = d.get("description_produit", "—")
+    valeur = d.get("valeur_produit", 0)
     statut = (d.get("statut") or "pending").replace("_", " ").title()
     
-    msg = f"{formatted_mission}\n\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"👤 *Client :* {client}\n"
-    msg += f"📞 *Contact :* {tel_client}\n"
-    msg += f"📝 *Description :* {description}\n"
-    msg += f"📊 *Statut :* {statut}\n"
+    # Message premium avec séparateurs et emojis
+    msg = (
+        f"{formatted_mission}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*📋 DÉTAILS DU COLIS*\n"
+        f"📝 {description}\n"
+        f"💰 Valeur : {_fmt_xaf(valeur)} FCFA\n\n"
+        "*👤 CLIENT*\n"
+        f"Nom : _{client}_\n"
+        f"📞 {tel_client}\n\n"
+        "*📊 STATUT ACTUEL*\n"
+        f"_{statut}_\n\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
     
+    # Stocker l'ID en contexte pour que "Accepter" seul fonctionne
     session.setdefault("ctx", {})["current_mission_id"] = d.get("id")
 
     # Compat : mémoriser l'id livraison si déjà lié
@@ -241,10 +251,10 @@ def details_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     if liv_id:
         session["ctx"]["current_livraison_id"] = liv_id
 
-    # Boutons dynamiques selon le statut
+    # Boutons dynamiques selon le statut (sans l'ID, il sera en contexte)
     st = (d.get("statut") or "").lower()
     if st == "en_attente":
-        return build_response(msg, _buttons(f"✅ Accepter {d.get('id')}", f"❌ Refuser {d.get('id')}", BTN_MENU))
+        return build_response(msg, _buttons("✅ Accepter", "❌ Refuser", BTN_MENU))
     elif st in {"assignee", "assigned"}:
         return build_response(msg, _buttons(BTN_DEMARRER, "🚴 Mes missions", BTN_MENU))
     else:
@@ -287,10 +297,18 @@ def accepter_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]
         return build_response("😕 Impossible d'accepter cette mission (peut-être déjà prise).", MAIN_MENU_BTNS + ["🔙 Retour"])
 
     session.setdefault("ctx", {})["current_mission_id"] = mission_id
-    return build_response(
-        f"✅ Mission #{mission_id} acceptée.\nTu peux *{BTN_DEMARRER}* quand tu es prêt.",
-        _buttons(BTN_DEMARRER, "🚴 Mes missions", BTN_MENU)
+    
+    # Message premium de confirmation
+    msg = (
+        f"*🎉 MISSION #{mission_id} ACCEPTÉE*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ _Tu es maintenant assigné à cette mission_\n\n"
+        f"👉 Clique sur *{BTN_DEMARRER}* quand tu es prêt\n"
+        "à te rendre au point de récupération\n\n"
+        "💡 _Pense à vérifier l'adresse avant de partir !_"
     )
+    
+    return build_response(msg, _buttons(BTN_DEMARRER, "🚴 Mes missions", BTN_MENU))
 
 def refuser_mission(session: Dict[str, Any], mission_id: str) -> Dict[str, Any]:
     # Endpoint /refuser/ selon API, si dispo. Ici feedback simple.
@@ -354,10 +372,18 @@ def action_demarrer(session: Dict[str, Any]) -> Dict[str, Any]:
 
     session.setdefault("ctx", {})["last_statut"] = "en_route_recuperation"
 
-    return build_response(
-        f"✅ Mission #{mid} démarrée • Livraison #{liv_id or '?'} créée.\n🚴 Direction le *point de récupération*.",
-        _buttons(BTN_PICKUP, "🚴 Mes missions", BTN_MENU)
+    # Message premium de démarrage
+    msg = (
+        f"*🚴 MISSION #{mid} DÉMARRÉE*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📋 Livraison *#{liv_id or '?'}* créée\n\n"
+        "📍 *PROCHAINE ÉTAPE*\n"
+        "→ _Rends-toi au point de récupération_\n\n"
+        f"👉 Clique sur *{BTN_PICKUP}* une fois le colis récupéré\n\n"
+        "💡 _N'oublie pas de vérifier l'état du colis !_"
     )
+    
+    return build_response(msg, _buttons(BTN_PICKUP, "🚴 Mes missions", BTN_MENU))
 
 def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
     """Au pickup: marquer la marchandise récupérée."""
@@ -372,10 +398,18 @@ def action_arrive_pickup(session: Dict[str, Any]) -> Dict[str, Any]:
 
     session.setdefault("ctx", {})["last_statut"] = "recupere"
 
-    return build_response(
-        f"📍 Mission #{mid} — *Pickup effectué*.\n👉 En route vers le client pour la livraison.",
-        _buttons(BTN_LIVREE, "🚴 Mes missions", BTN_MENU)
+    # Message premium pickup
+    msg = (
+        f"*📍 COLIS RÉCUPÉRÉ*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"✅ Mission *#{mid}* — Pickup effectué\n\n"
+        "📍 *PROCHAINE ÉTAPE*\n"
+        "→ _Direction le client pour la livraison_\n\n"
+        f"👉 Clique sur *{BTN_LIVREE}* après avoir remis le colis\n\n"
+        "💡 _Assure-toi que le client est bien le destinataire !_"
     )
+    
+    return build_response(msg, _buttons(BTN_LIVREE, "🚴 Mes missions", BTN_MENU))
 
 def action_livree(session: Dict[str, Any]) -> Dict[str, Any]:
     """Finalisation: marquer livrée côté mission."""
@@ -390,11 +424,24 @@ def action_livree(session: Dict[str, Any]) -> Dict[str, Any]:
 
     ctx = session.setdefault("ctx", {})
     ctx["last_statut"] = "livree"
+    
+    # Nettoyer le contexte de la mission terminée
+    ctx.pop("current_mission_id", None)
+    ctx.pop("current_livraison_id", None)
 
-    return build_response(
-        f"✅ Mission #{mid} *livrée avec succès* 🚚\nMerci pour ton professionnalisme 👏",
-        MAIN_MENU_BTNS
+    # Message premium de succès
+    msg = (
+        f"*🎉 MISSION #{mid} TERMINÉE*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ *Livraison effectuée avec succès !*\n\n"
+        "🚚 Le colis a été remis au client\n"
+        "👏 _Merci pour ton professionnalisme_\n\n"
+        "💰 Ta rémunération sera créditée prochainement\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👉 Prêt pour une nouvelle mission ?"
     )
+    
+    return build_response(msg, MAIN_MENU_BTNS)
 
 # ---------- Livraisons / statut / position ----------
 def _ensure_livraison_id(session: Dict[str, Any]) -> Optional[str]:
@@ -525,18 +572,40 @@ def handle_message(
             return build_response("❌ Id manquant. Ex: *Détails 123*", MAIN_MENU_BTNS)
         return details_mission(session, mid)
 
-    if tl.startswith("✅ accepter ") or tl.startswith("accepter "):
+    if tl.startswith("✅ accepter") or tl.startswith("accepter"):
+        # Essayer d'extraire l'ID de la commande
         part = tl.split(" ",1)[1] if " " in tl else ""
         mid = re.sub(r"[^0-9]", "", part)
+        
+        # Si pas d'ID dans la commande, utiliser la mission en contexte
         if not mid:
-            return build_response("❌ Id manquant. Ex: *Accepter 123*", MAIN_MENU_BTNS)
+            mid = str(session.get("ctx", {}).get("current_mission_id", ""))
+        
+        if not mid:
+            return build_response(
+                "❌ *Aucune mission sélectionnée*\n\n"
+                "💡 _Clique d'abord sur une mission dans la liste,_\n"
+                "_puis utilise le bouton \"✅ Accepter\"_",
+                MAIN_MENU_BTNS
+            )
         return accepter_mission(session, mid)
 
-    if tl.startswith("❌ refuser ") or tl.startswith("refuser "):
+    if tl.startswith("❌ refuser") or tl.startswith("refuser"):
+        # Essayer d'extraire l'ID de la commande
         part = tl.split(" ",1)[1] if " " in tl else ""
         mid = re.sub(r"[^0-9]", "", part)
+        
+        # Si pas d'ID dans la commande, utiliser la mission en contexte
         if not mid:
-            return build_response("❌ Id manquant. Ex: *Refuser 123*", MAIN_MENU_BTNS)
+            mid = str(session.get("ctx", {}).get("current_mission_id", ""))
+        
+        if not mid:
+            return build_response(
+                "❌ *Aucune mission sélectionnée*\n\n"
+                "💡 _Clique d'abord sur une mission dans la liste,_\n"
+                "_puis utilise le bouton \"❌ Refuser\"_",
+                MAIN_MENU_BTNS
+            )
         return refuser_mission(session, mid)
 
     # Actions directes
