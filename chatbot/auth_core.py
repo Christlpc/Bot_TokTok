@@ -597,9 +597,27 @@ def signup_submit(session: Dict[str, Any], phone: str) -> Dict[str, Any]:
             rr = requests.post(f"{API_BASE}/api/v1/auth/clients/", json=payload, timeout=TIMEOUT)
 
         elif role == "livreur":
+            # Créer un username convivial pour le livreur au lieu du numéro de téléphone
+            first = data.get("first_name", "").strip().lower()
+            last = data.get("last_name", "").strip().lower()
+            phone_suffix = phone_e164[-4:]  # Derniers 4 chiffres pour unicité
+            
+            # Générer username : prenom.nom.XXXX (ex: jean.dupont.2756)
+            if first and last:
+                username = f"{first}.{last}.{phone_suffix}"
+            elif first:
+                username = f"{first}.{phone_suffix}"
+            elif last:
+                username = f"{last}.{phone_suffix}"
+            else:
+                username = f"livreur.{phone_suffix}"
+            
+            # Nettoyer caractères spéciaux et espaces
+            username = username.replace(" ", "").replace("'", "").replace("-", "")
+            
             payload = {
                 "user": {
-                    "username": phone_e164,
+                    "username": username,
                     "email": data.get("email", ""),
                     "first_name": data.get("first_name", ""),
                     "last_name": data.get("last_name", ""),
