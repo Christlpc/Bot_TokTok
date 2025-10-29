@@ -151,3 +151,4 @@ Résultat attendu:
 
 *Correction appliquée le 27 octobre 2025*
 
+

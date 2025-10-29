@@ -238,3 +238,4 @@ Si ça fonctionne → **Bug complètement résolu** ! ✅
 
 *Correction appliquée le 27 octobre 2025*
 
+

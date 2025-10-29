@@ -307,3 +307,4 @@ Résultat attendu:
 
 *Documentation générée le 27 octobre 2025*
 
+

@@ -274,3 +274,4 @@ def format_mission_for_livreur(mission: Dict[str, Any], livreur_position: Option
     
     return "\n".join(lines)
 
+

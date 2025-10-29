@@ -237,6 +237,20 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
         merchant = session.get("market_merchant", {})
         produit = session.get("selected_product", {})
 
+        # Utiliser les valeurs déjà converties de la session
+        # (plus fiable que de reconvertir depuis produit qui peut contenir des strings formatées)
+        unit_price = d.get("unit_price", 0)
+        try:
+            unit_price = float(unit_price) if unit_price else 0
+        except (ValueError, TypeError):
+            unit_price = 0
+        
+        quantity = d.get("quantity", 1)
+        try:
+            quantity = int(quantity) if quantity else 1
+        except (ValueError, TypeError):
+            quantity = 1
+        
         payload = {
             "entreprise": int(merchant.get("id", 0)),
             "adresse_livraison": d.get("depart") or "Adresse non précisée",
@@ -244,8 +258,8 @@ def marketplace_create_order(session: Dict[str, Any]) -> Dict[str, Any]:
             "notes_client": d.get("description") or "",
             "details": [{
                 "produit": int(produit.get("id", 0)),
-                "quantite": int(d.get("quantity", 1)),
-                "prix_unitaire": float(produit.get("prix", 0)),
+                "quantite": quantity,
+                "prix_unitaire": unit_price,
             }],
             "status": "en_attente",
         }
@@ -661,6 +675,13 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
             error = generate_smart_error_message(text, "quantity", step)
             return build_response(error, ["🔙 Retour"])
         
+        # CONVERSION CRITIQUE : qty peut être une string ("5"), il faut la convertir en int
+        try:
+            qty = int(qty) if qty else 1
+        except (ValueError, TypeError):
+            logger.warning(f"[MARKET_QTY] Impossible de convertir qty en int: {qty}")
+            qty = 1
+        
         # Enregistrer la quantité et calculer le total
         session.setdefault("new_request", {})
         session["new_request"]["quantity"] = qty
@@ -797,9 +818,22 @@ def flow_marketplace_handle(session: Dict[str, Any], text: str,
         d = session["new_request"]
         merchant = session.get("market_merchant", {})
         pickup_addr, _ = _merchant_pickup_info(merchant)
-        qty = d.get("quantity", 1)
-        unit_price = d.get("unit_price", 0)
-        total_price = d.get("value_fcfa", 0)
+        
+        # Sécurité : s'assurer que tout est du bon type (int/float) et non des strings
+        try:
+            qty = int(d.get("quantity", 1)) if d.get("quantity") else 1
+        except (ValueError, TypeError):
+            qty = 1
+        
+        try:
+            unit_price = float(d.get("unit_price", 0)) if d.get("unit_price") else 0
+        except (ValueError, TypeError):
+            unit_price = 0
+        
+        try:
+            total_price = float(d.get("value_fcfa", 0)) if d.get("value_fcfa") else 0
+        except (ValueError, TypeError):
+            total_price = 0
 
         # FIX #3: Utiliser PAYMENT_METHODS pour afficher le label correct
         payment_label = "Espèces" if payment_method == "espèces" else \
