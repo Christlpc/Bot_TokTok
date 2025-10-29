@@ -225,7 +225,10 @@ def login_common(session: Dict[str, Any], username: str, password: str) -> Dict[
         last = (prof.get("user") or {}).get("last_name", "")
         display_name = (f"{first} {last}").strip() or (prof.get("user") or {}).get("username") or username
     elif role == "livreur":
-        display_name = prof.get("nom_complet") or prof.get("nom") or username
+        # Essayer plusieurs sources pour le nom du livreur
+        first = (prof.get("user") or {}).get("first_name", "")
+        last = (prof.get("user") or {}).get("last_name", "")
+        display_name = (f"{first} {last}").strip() or prof.get("nom_complet") or prof.get("nom") or (prof.get("user") or {}).get("username") or username
     elif role == "entreprise":
         display_name = prof.get("nom_entreprise") or prof.get("responsable", "") or username
 

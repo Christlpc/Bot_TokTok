@@ -559,9 +559,18 @@ def handle_message(
     if tl in {"historique","history"}:
         return handle_history(session)
 
-    # Fallback d’aide
+    # === GESTION DES SÉLECTIONS DE LISTE INTERACTIVE ===
+    # Quand le livreur clique sur une liste WhatsApp, ça envoie juste l'ID (ex: "60", "#56")
+    # On détecte les IDs numériques directs et affiche les détails automatiquement
+    mission_id_match = re.match(r'^#?(\d+)$', tl)
+    if mission_id_match:
+        mission_id = mission_id_match.group(1)
+        logger.info(f"[LIVREUR] Détection ID mission direct: {mission_id}")
+        return details_mission(session, mission_id)
+
+    # Fallback d'aide
     aide = (
-        "❓ Je n’ai pas compris. Essaie :\n"
+        "❓ Je n'ai pas compris. Essaie :\n"
         "• *📋 Missions* — voir les missions disponibles\n"
         "• *🚴 Mes missions* — reprendre une mission en cours\n"
         "• *🔄 Statut* — te rendre disponible/indisponible\n"
